@@ -14,19 +14,34 @@
 ; ---------------------------------------------------------------------------
 VIC_CTRL1       = $D011
 VIC_RASTER      = $D012
+VIC_CTRL2       = $D016
 VIC_IRQ_STATUS  = $D019
 VIC_IRQ_MASK    = $D01A
 VIC_BORDER      = $D020
 VIC_BG          = $D021
 
+VIC_SPR0_X      = $D000
+VIC_SPR0_Y      = $D001
+VIC_SPR1_X      = $D002
+VIC_SPR1_Y      = $D003
+VIC_SPR_XMSB    = $D010
+VIC_SPR_EN      = $D015
+VIC_SPR_PRI     = $D01B
+VIC_SPR0_COL    = $D027
+VIC_SPR1_COL    = $D028
+
 CIA1_ICR        = $DC0D
 
 SCREEN          = $0400
 COLRAM          = $D800
+SPR_PTR         = SCREEN + $03F8    ; Sprite data pointers
 
 COLS            = 40
 ROWS            = 25
 TOTAL_BYTES     = ROWS * COLS       ; 1000
+
+SPR_Y_CENTER    = 140               ; Vertical center of screen
+LIGHT_BLUE      = $0E
 
 ; ---------------------------------------------------------------------------
 ;  Zero page
@@ -82,6 +97,41 @@ start:
         sta text_lo
         lda #>text_data
         sta text_hi
+
+        ; --- Horizontal scroll: 40-col mode, no scroll ---
+        lda #$08                    ; CSEL=1 (40 cols), XSCROLL=0
+        sta VIC_CTRL2
+
+        ; --- Set up sprites ---
+        ; Sprite data pointers: sprite 0 at $2000/64=$80, sprite 1 at $2040/64=$81
+        lda #$80
+        sta SPR_PTR                 ; Sprite 0 = right-pointing triangle
+        lda #$81
+        sta SPR_PTR+1               ; Sprite 1 = left-pointing triangle
+
+        ; Sprite positions — vertically centered
+        lda #24                     ; X = left edge of visible area
+        sta VIC_SPR0_X
+        lda #64                     ; X = 320 (256+64), right edge
+        sta VIC_SPR1_X
+        lda #$02                    ; MSB bit 1 set for sprite 1 (X>255)
+        sta VIC_SPR_XMSB
+        lda #SPR_Y_CENTER
+        sta VIC_SPR0_Y
+        sta VIC_SPR1_Y
+
+        ; Sprite colours = light blue
+        lda #LIGHT_BLUE
+        sta VIC_SPR0_COL
+        sta VIC_SPR1_COL
+
+        ; Priority: sprites behind foreground (text draws on top)
+        lda #$03
+        sta VIC_SPR_PRI
+
+        ; Enable sprites 0 and 1
+        lda #$03
+        sta VIC_SPR_EN
 
         ; ---- Install raster IRQ ----
         lda #$7F
@@ -426,3 +476,60 @@ text_data:
 .byte BLK
 
 text_data_end:
+
+; =============================================================================
+;  Sprite data at $2000 — dedicated SPRITES segment
+;  Right-pointing (►) for left side, Left-pointing (◄) for right side
+;  Each sprite: 24×21 pixels = 63 bytes + 1 pad = 64 bytes
+;  Sprite 0 pointer = $2000/64 = $80
+;  Sprite 1 pointer = $2040/64 = $81
+; =============================================================================
+.segment "SPRITES"
+
+spr_right_tri:  ; at $2000
+        .byte $80,$00,$00           ; Row 0:  *
+        .byte $C0,$00,$00           ; Row 1:  **
+        .byte $E0,$00,$00           ; Row 2:  ***
+        .byte $F0,$00,$00           ; Row 3:  ****
+        .byte $F8,$00,$00           ; Row 4:  *****
+        .byte $FC,$00,$00           ; Row 5:  ******
+        .byte $FE,$00,$00           ; Row 6:  *******
+        .byte $FF,$00,$00           ; Row 7:  ********
+        .byte $FF,$80,$00           ; Row 8:  *********
+        .byte $FF,$C0,$00           ; Row 9:  **********
+        .byte $FF,$E0,$00           ; Row 10: *********** (widest)
+        .byte $FF,$C0,$00           ; Row 11: **********
+        .byte $FF,$80,$00           ; Row 12: *********
+        .byte $FF,$00,$00           ; Row 13: ********
+        .byte $FE,$00,$00           ; Row 14: *******
+        .byte $FC,$00,$00           ; Row 15: ******
+        .byte $F8,$00,$00           ; Row 16: *****
+        .byte $F0,$00,$00           ; Row 17: ****
+        .byte $E0,$00,$00           ; Row 18: ***
+        .byte $C0,$00,$00           ; Row 19: **
+        .byte $80,$00,$00           ; Row 20: *
+        .byte $00                   ; Pad to 64 bytes
+
+spr_left_tri:   ; at $2040
+        .byte $00,$00,$01           ; Row 0:                        *
+        .byte $00,$00,$03           ; Row 1:                       **
+        .byte $00,$00,$07           ; Row 2:                      ***
+        .byte $00,$00,$0F           ; Row 3:                     ****
+        .byte $00,$00,$1F           ; Row 4:                    *****
+        .byte $00,$00,$3F           ; Row 5:                   ******
+        .byte $00,$00,$7F           ; Row 6:                  *******
+        .byte $00,$00,$FF           ; Row 7:                 ********
+        .byte $00,$01,$FF           ; Row 8:                *********
+        .byte $00,$03,$FF           ; Row 9:               **********
+        .byte $00,$07,$FF           ; Row 10:              *********** (widest)
+        .byte $00,$03,$FF           ; Row 11:               **********
+        .byte $00,$01,$FF           ; Row 12:                *********
+        .byte $00,$00,$FF           ; Row 13:                 ********
+        .byte $00,$00,$7F           ; Row 14:                  *******
+        .byte $00,$00,$3F           ; Row 15:                   ******
+        .byte $00,$00,$1F           ; Row 16:                    *****
+        .byte $00,$00,$0F           ; Row 17:                     ****
+        .byte $00,$00,$07           ; Row 18:                      ***
+        .byte $00,$00,$03           ; Row 19:                       **
+        .byte $00,$00,$01           ; Row 20:                        *
+        .byte $00                   ; Pad to 64 bytes

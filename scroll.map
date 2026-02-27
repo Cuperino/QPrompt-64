@@ -1,0 +1,36 @@
+Modules list:
+-------------
+scroll.o:
+    CODE              Offs=000000  Size=000135  Align=00001  Fill=0000
+    RODATA            Offs=000000  Size=000DC0  Align=00001  Fill=0000
+    ZEROPAGE          Offs=000000  Size=000007  Align=00001  Fill=0000
+    LOADADDR          Offs=000000  Size=000002  Align=00001  Fill=0000
+    STARTUP           Offs=000000  Size=00000C  Align=00001  Fill=0000
+    SPRITES           Offs=000000  Size=000080  Align=00001  Fill=0000
+
+
+Segment list:
+-------------
+Name                   Start     End    Size  Align
+----------------------------------------------------
+ZEROPAGE              000002  000008  000007  00001
+LOADADDR              0007FF  000800  000002  00001
+STARTUP               000801  00080C  00000C  00001
+CODE                  00080D  000941  000135  00001
+RODATA                000942  001701  000DC0  00001
+SPRITES               002000  00207F  000080  00001
+
+
+Exports list by name:
+---------------------
+
+
+
+Exports list by value:
+----------------------
+
+
+
+Imports list:
+-------------
+
