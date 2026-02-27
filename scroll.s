@@ -42,6 +42,20 @@ TOTAL_BYTES     = ROWS * COLS       ; 1000
 
 SPR_Y_CENTER    = 140               ; Vertical center of screen
 LIGHT_BLUE      = $0E
+DARK_GRAY       = $0B               ; Background in zone
+LIGHT_GRAY      = $01               ; Text colour in zone
+WHITE           = $0F               ; Text colour outside zone
+
+; Raster IRQ positions (24-row mode: display starts raster 55)
+; Row 8 starts:  55 + 8*8  = 119
+; Row 15 starts: 55 + 15*8 = 175  (one past zone end)
+RASTER_ZONE_ON  = 119               ; Start of tone zone
+RASTER_ZONE_OFF = 175               ; End of zone
+RASTER_SCROLL   = 250               ; Scroll update (lower border)
+
+; Zone rows (screen rows 8..14 = ±3 rows around sprite centre row 11)
+ZONE_TOP_ROW    = 8
+ZONE_BOT_ROW    = 14
 
 ; ---------------------------------------------------------------------------
 ;  Zero page
@@ -52,6 +66,8 @@ zp_dst:         .res 2              ; general purpose dest pointer
 fine_scroll:    .res 1              ; current fine-scroll value (7..0)
 text_lo:        .res 1              ; pointer into text_data (low)
 text_hi:        .res 1              ; pointer into text_data (high)
+irq_state:      .res 1              ; 0=zone_on, 1=zone_off, 2=scroll
+do_coarse:      .res 1              ; non-zero = coarse scroll pending
 
 ; ---------------------------------------------------------------------------
 ;  PRG load address (consumed by LOAD, not part of memory image)
@@ -133,7 +149,7 @@ start:
         lda #$03
         sta VIC_SPR_EN
 
-        ; ---- Install raster IRQ ----
+        ; ---- Install raster IRQ chain ----
         lda #$7F
         sta CIA1_ICR                ; disable CIA timer IRQs
         lda CIA1_ICR                ; acknowledge pending
@@ -141,11 +157,13 @@ start:
         lda #$01
         sta VIC_IRQ_MASK            ; enable VIC raster IRQ
 
-        ; Raster line = 250 (in the lower border)
+        ; Start with zone-on IRQ at raster 119
+        lda #0
+        sta irq_state
         lda VIC_CTRL1
         and #$7F                    ; clear raster bit 8
         sta VIC_CTRL1
-        lda #250
+        lda #RASTER_ZONE_ON
         sta VIC_RASTER
 
         ; Point IRQ vector
@@ -156,8 +174,13 @@ start:
 
         cli
 
-        ; Idle loop — everything happens in the IRQ
+        ; Idle loop — polls do_coarse flag; everything else happens in the IRQ
 @forever:
+        lda do_coarse
+        beq @forever
+        lda #0
+        sta do_coarse
+        jsr scroll_screen_up
         jmp @forever
 
 
@@ -172,50 +195,121 @@ clear_screen:
         inx
         bne @cs1
 
-        lda #$01                    ; white
+        ; Colour RAM: rows 0-7 = white (bytes 0-319)
+        ;            rows 8-14 = light gray (bytes 320-599)
+        ;            rows 15-24 = white (bytes 600-999)
+        ; Split across pages since X is 8-bit only.
+
+        ; Bytes 0-255: rows 0-6 (all white)
+        lda #WHITE
         ldx #0
-@cs2:   sta COLRAM, x
-        sta COLRAM+256, x
-        sta COLRAM+512, x
-        sta COLRAM+744, x
+@cr0:   sta COLRAM, x
         inx
-        bne @cs2
+        bne @cr0
+
+        ; Bytes 256-319: rest of row7 (still white), 0-63 past page 1
+        lda #WHITE
+        ldx #0
+@cr1a:  sta COLRAM+256, x
+        inx
+        cpx #64
+        bne @cr1a
+
+        ; Bytes 320-511: rows 8-12 completely within page 1+2 overlap
+        ;   (320-511 = page 1 offsets 64-255 = bytes 320..511 → light gray)
+        lda #LIGHT_GRAY
+        ldx #64
+@cr1b:  sta COLRAM+256, x
+        inx
+        bne @cr1b              ; wraps at 256, covers 64-255 = bytes 320-511
+
+        ; Bytes 512-599: top of page 2 (offsets 0-87) = rows 12-14 (light gray)
+        lda #LIGHT_GRAY
+        ldx #0
+@cr2a:  sta COLRAM+512, x
+        inx
+        cpx #88
+        bne @cr2a
+
+        ; Bytes 600-767: offsets 88-255 in page2 = rows 15-19 (white)
+        lda #WHITE
+        ldx #88
+@cr2b:  sta COLRAM+512, x
+        inx
+        bne @cr2b              ; wraps at 256
+
+        ; Bytes 768-999: page 3 offsets 0-231 = rows 19-24 (white)
+        lda #WHITE
+        ldx #0
+@cr3:   sta COLRAM+744, x
+        inx
+        cpx #232               ; 1000-768=232
+        bne @cr3
         rts
 
 
-; ---- Raster IRQ handler ----------------------------------------------------
-; Key: $D011 is written FIRST, before any heavy work, so the VIC-II
-; always has the correct fine-scroll value before the next visible frame.
+
+; ---- Raster IRQ handler (3-point chain) ------------------------------------
+; State 0 → raster ZONE_ON  (119): set dark gray bg, advance to state 1
+; State 1 → raster ZONE_OFF (175): set black bg,     advance to state 2
+; State 2 → raster SCROLL   (250): fine/coarse scroll, advance to state 0
 irq_handler:
         lda #$01
-        sta VIC_IRQ_STATUS          ; acknowledge raster IRQ
+        sta VIC_IRQ_STATUS          ; acknowledge
 
-        ; Decrement fine scroll
+        lda irq_state
+        bne @not_state0
+
+        ; --- State 0: zone start ---
+        lda #DARK_GRAY
+        sta VIC_BG
+        lda #RASTER_ZONE_OFF
+        sta VIC_RASTER
+        lda #1
+        sta irq_state
+        jmp $EA31
+
+@not_state0:
+        cmp #1
+        bne @state2
+
+        ; --- State 1: zone end ---
+        lda #0
+        sta VIC_BG
+        lda #RASTER_SCROLL
+        sta VIC_RASTER
+        lda #2
+        sta irq_state
+        jmp $EA31
+
+@state2:
+        ; --- State 2: scroll update ---
+        ; Reset next IRQ to zone start, return FAST — no heavy work here.
+        lda #RASTER_ZONE_ON
+        sta VIC_RASTER
+        lda #0
+        sta irq_state
+
+        ; Decrement fine scroll and update $D011 immediately
         dec fine_scroll
         lda fine_scroll
-        bpl @update                 ; still >= 0 → just update $D011
+        bpl @update
 
-        ; Wrapped past 0 → reset to 7, update $D011 NOW, then coarse scroll
+        ; Coarse scroll needed — just set the flag, main loop handles it
         lda #7
         sta fine_scroll
-
-        ; Update $D011 immediately (before the slow coarse copy)
-        ;   bit 3 = 0  → 24-row mode (hides row 25 used as buffer)
-        ;   bit 4 = 1  → screen on (DEN)
-        ;   bits 0-2   = fine_scroll (7)
+        lda #7
         ora #%00010000
         sta VIC_CTRL1
-
-        jsr scroll_screen_up
-        jmp $EA31                   ; chain to Kernal IRQ epilogue
+        lda #1
+        sta do_coarse
+        jmp $EA31
 
 @update:
-        ; Normal frame: just set $D011 with current fine_scroll
         lda fine_scroll
-        ora #%00010000              ; DEN=1, RSEL=0 (24 rows)
+        ora #%00010000
         sta VIC_CTRL1
-
-        jmp $EA31                   ; chain to Kernal IRQ epilogue
+        jmp $EA31
 
 
 ; ---- Coarse scroll: shift screen up 1 row, draw new bottom row -------------
@@ -265,7 +359,7 @@ scroll_screen_up:
         bne @fill
 
         ; Colour for new row = white
-        lda #$01
+        lda #$0F
         ldy #0
 @clr:   sta COLRAM + (ROWS-1)*COLS, y
         iny
