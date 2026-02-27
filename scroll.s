@@ -134,6 +134,8 @@ clear_screen:
 
 
 ; ---- Raster IRQ handler ----------------------------------------------------
+; Key: $D011 is written FIRST, before any heavy work, so the VIC-II
+; always has the correct fine-scroll value before the next visible frame.
 irq_handler:
         lda #$01
         sta VIC_IRQ_STATUS          ; acknowledge raster IRQ
@@ -141,19 +143,24 @@ irq_handler:
         ; Decrement fine scroll
         dec fine_scroll
         lda fine_scroll
-        bpl @apply                  ; still >= 0, just update register
+        bpl @update                 ; still >= 0 → just update $D011
 
-        ; Wrapped past 0 → coarse scroll
+        ; Wrapped past 0 → reset to 7, update $D011 NOW, then coarse scroll
         lda #7
         sta fine_scroll
 
-        jsr scroll_screen_up
-
-@apply:
-        ; Build $D011 value:
+        ; Update $D011 immediately (before the slow coarse copy)
         ;   bit 3 = 0  → 24-row mode (hides row 25 used as buffer)
         ;   bit 4 = 1  → screen on (DEN)
-        ;   bits 0-2   = fine_scroll
+        ;   bits 0-2   = fine_scroll (7)
+        ora #%00010000
+        sta VIC_CTRL1
+
+        jsr scroll_screen_up
+        jmp $EA31                   ; chain to Kernal IRQ epilogue
+
+@update:
+        ; Normal frame: just set $D011 with current fine_scroll
         lda fine_scroll
         ora #%00010000              ; DEN=1, RSEL=0 (24 rows)
         sta VIC_CTRL1
@@ -191,31 +198,8 @@ scroll_screen_up:
         cpx #(TOTAL_BYTES - 768 - COLS)
         bne @p3
 
-        ; Same for colour RAM
-        ldx #0
-@c0:    lda COLRAM+COLS, x
-        sta COLRAM, x
-        inx
-        bne @c0
-
-        ldx #0
-@c1:    lda COLRAM+COLS+256, x
-        sta COLRAM+256, x
-        inx
-        bne @c1
-
-        ldx #0
-@c2:    lda COLRAM+COLS+512, x
-        sta COLRAM+512, x
-        inx
-        bne @c2
-
-        ldx #0
-@c3:    lda COLRAM+COLS+768, x
-        sta COLRAM+768, x
-        inx
-        cpx #(TOTAL_BYTES - 768 - COLS)
-        bne @c3
+        ; Colour RAM is NOT copied — all cells share the same colour,
+        ; so only the new bottom row needs its colour set (done below).
 
         ; Fill bottom row (row 24 = offset 960) with next text line
         lda text_lo
