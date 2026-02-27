@@ -36,9 +36,9 @@ SCREEN          = $0400
 COLRAM          = $D800
 SPR_PTR         = SCREEN + $03F8    ; Sprite data pointers
 
-COLS            = 40
+COLS            = 40                ; visible columns (38-col mode)
+SCREEN_COLS     = 40                ; screen memory stride (always 40)
 ROWS            = 25
-TOTAL_BYTES     = ROWS * COLS       ; 1000
 
 SPR_Y_CENTER    = 140               ; Vertical center of screen
 LIGHT_BLUE      = $0E
@@ -114,8 +114,8 @@ start:
         lda #>text_data
         sta text_hi
 
-        ; --- Horizontal scroll: 40-col mode, no scroll ---
-        lda #$08                    ; CSEL=1 (40 cols), XSCROLL=0
+        ; --- Horizontal scroll: 38-col mode, no scroll ---
+        lda #$00                    ; CSEL=0, XSCROLL=0
         sta VIC_CTRL2
 
         ; --- Set up sprites ---
@@ -320,28 +320,28 @@ scroll_screen_up:
         ; 4 pages: 3 full (256 bytes) + 1 partial (192 bytes)
 
         ldx #0
-@p0:    lda SCREEN+COLS, x
+@p0:    lda SCREEN+SCREEN_COLS, x
         sta SCREEN, x
         inx
         bne @p0
 
         ldx #0
-@p1:    lda SCREEN+COLS+256, x
+@p1:    lda SCREEN+SCREEN_COLS+256, x
         sta SCREEN+256, x
         inx
         bne @p1
 
         ldx #0
-@p2:    lda SCREEN+COLS+512, x
+@p2:    lda SCREEN+SCREEN_COLS+512, x
         sta SCREEN+512, x
         inx
         bne @p2
 
         ldx #0
-@p3:    lda SCREEN+COLS+768, x
+@p3:    lda SCREEN+SCREEN_COLS+768, x
         sta SCREEN+768, x
         inx
-        cpx #(TOTAL_BYTES - 768 - COLS)
+        cpx #((ROWS-1)*SCREEN_COLS - 768)
         bne @p3
 
         ; Colour RAM is NOT copied — all cells share the same colour,
@@ -355,7 +355,7 @@ scroll_screen_up:
 
         ldy #0
 @fill:  lda (zp_src), y
-        sta SCREEN + (ROWS-1)*COLS, y
+        sta SCREEN + (ROWS-1)*SCREEN_COLS, y
         iny
         cpy #COLS
         bne @fill
@@ -363,12 +363,12 @@ scroll_screen_up:
         ; Colour for new row = white
         lda #$0F
         ldy #0
-@clr:   sta COLRAM + (ROWS-1)*COLS, y
+@clr:   sta COLRAM + (ROWS-1)*SCREEN_COLS, y
         iny
         cpy #COLS
         bne @clr
 
-        ; Advance text pointer by 40
+        ; Advance text pointer by COLS
         clc
         lda text_lo
         adc #COLS
