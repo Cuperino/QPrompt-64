@@ -263,6 +263,7 @@ irq_handler:
         ; --- State 0: zone start ---
         lda #DARK_GRAY
         sta VIC_BG
+        sta VIC_BORDER              ; border matches bg — appears transparent
         lda #RASTER_ZONE_OFF
         sta VIC_RASTER
         lda #1
@@ -276,6 +277,7 @@ irq_handler:
         ; --- State 1: zone end ---
         lda #0
         sta VIC_BG
+        sta VIC_BORDER              ; border back to black
         lda #RASTER_SCROLL
         sta VIC_RASTER
         lda #2
