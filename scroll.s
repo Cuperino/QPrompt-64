@@ -172,7 +172,7 @@ clear_screen:
         inx
         bne @cs1
 
-        lda #$0D                    ; light green
+        lda #$01                    ; white
         ldx #0
 @cs2:   sta COLRAM, x
         sta COLRAM+256, x
@@ -264,8 +264,8 @@ scroll_screen_up:
         cpy #COLS
         bne @fill
 
-        ; Colour for new row = light green
-        lda #$0D
+        ; Colour for new row = white
+        lda #$01
         ldy #0
 @clr:   sta COLRAM + (ROWS-1)*COLS, y
         iny
