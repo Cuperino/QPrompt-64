@@ -385,10 +385,7 @@ irq_handler:
 
 @csel_pass2:
         ; --- Pass 2 (raster 138): stable entry, ≤2-cycle jitter ---
-        ; Reset pass for next frame
-        lda #0
-        sta csel_pass
-
+        ;
         ; Cycle accounting from raster 138 trigger to here:
         ;   CPU IRQ ack + KERNAL push/dispatch = 36 cycles (fixed)
         ;   our handler: sta $D019(4) + lda irq_state(3) + cmp #3(2) +
@@ -396,36 +393,29 @@ irq_handler:
         ;   TOTAL: 36 + 18 = 54 cycles ± 0-2 jitter
         ;
         ; We're at cycle ~54 of raster 138.
-        ; Target: start LDA for first dodge at cycle 48 of raster 139.
-        ;   STA write at cycle 48+2+3 = 53. ✓ (within dodge window)
-        ; Gap: (63 - 54) + 48 = 57 cycles from here to LDA start.
-        ; But we need LDA #val (2 cy) before the STA, so we account for
-        ; the LDA in the gap:  57 - 2 = 55 cycles of pure waste before LDA.
-        ; But wait — we also need to include the LDA+STA in the sequence.
-        ; Let me recount:
-        ;   From cycle 54 of raster 138:
-        ;     Remaining in raster 138: 63 - 54 = 9 cycles
-        ;     Full raster 139: 63 cycles
-        ;     Target: write at cycle 54 of raster 139
-        ;     Total cycles to write: 9 + 54 = 63 cycles
-        ;     Minus the LDA(2)+STA(4)=6 that produce the write: 63-6 = 57 waste
-        ;   But the STA 4th cycle (write) is at the 6th cycle from LDA start.
-        ;   Hmm, STA abs write is at cycle 4 of STA = cycle 2+4=6 from LDA.
-        ;   Actually: LDA takes 2 cycles (cycles 0-1), STA starts at cycle 2,
-        ;   STA writes on its 4th cycle = cycle 5 from LDA start.
-        ;   So from LDA start to write = 5 cycles.
-        ;   Target write at 63: LDA starts at 63-5 = 58.
-        ;   Waste: 58 cycles of NOPs.
-        ;   58/2 = 29 NOPs.
+        ;
+        ; Set CSEL=1 now so VIC sees 40-col mode at cycle 53 of raster 139.
+        ; Without this, CSEL=0 would cause the $14F comparison to match at
+        ; cycle 53, setting the border flip-flop before we can dodge.
+        lda #CTRL2_40COL            ; 2 cy → cycle 56
+        sta VIC_CTRL2               ; 4 cy → cycle 60 (CSEL now 1)
+        ; Reset pass for next frame
+        lda #0                      ; 2 cy → cycle 62
+        sta csel_pass               ; 3 cy → wraps into raster 139, done at cy 2
+        ;
+        ; From cycle 2 of raster 139, target dodge write at cycle 53:
+        ;   LDA(2)+STA(4)=6 cy, write on STA's 4th cycle = LDA_start + 5.
+        ;   LDA starts at 53 - 5 = 48.  Waste: 48 - 2 = 46 cy = 23 NOPs.
 
-        ; -- 29 NOPs = 58 cycles --
-        .repeat 29
+        ; -- 23 NOPs = 46 cycles --
+        .repeat 23
         nop
         .endrepeat
 
-        ; First dodge: LDA + STA writes CSEL=0 at ~cycle 54 of raster 139.
-        ; This prevents the right border FF from being set → line 140 has
-        ; no left border.
+        ; First dodge: LDA + STA writes CSEL=0 at ~cycle 53 of raster 139.
+        ; VIC saw CSEL=1 at cycle 53 → skipped $14F check.
+        ; VIC sees CSEL=0 at cycle 56 → checks $14F (already passed) → no match.
+        ; Border flip-flop stays LOW → no left border on line 140.
         lda #CTRL2_38COL            ; 2 cy
         sta VIC_CTRL2               ; 4 cy → write on 4th cy (the dodge)
 
