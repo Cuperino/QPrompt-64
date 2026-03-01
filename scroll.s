@@ -375,44 +375,51 @@ irq_handler:
         lda csel_pass
         bne @csel_pass2
 
-        ; --- Pass 1 (raster 137): re-arm for raster 138, exit fast ---
+        ; --- Pass 1 (raster 137): re-arm for raster 138, exit FAST ---
+        ; MUST use $EA81 (quick RTI), NOT $EA31 (full KERNAL handler).
+        ; $EA31 runs keyboard scan/jiffy clock (~300 cy), pushing pass 2
+        ; into raster 142+ and completely missing the dodge window.
         lda #1
         sta csel_pass
         lda #RASTER_CSEL_2ND
         sta VIC_RASTER
         ; Stay in state 3
-        jmp $EA31
+        jmp $EA81               ; quick exit: PLA/TAY/PLA/TAX/PLA/RTI
 
 @csel_pass2:
         ; --- Pass 2 (raster 138): stable entry, ≤2-cycle jitter ---
         ;
-        ; Cycle accounting from raster 138 trigger to here:
-        ;   CPU IRQ ack + KERNAL push/dispatch = 36 cycles (fixed)
-        ;   our handler: sta $D019(4) + lda irq_state(3) + cmp #3(2) +
-        ;     beq(3) + lda csel_pass(3) + bne(3) = 18 cycles
-        ;   TOTAL: 36 + 18 = 54 cycles ± 0-2 jitter
+        ; Cycle accounting:
+        ;   Pass 1 total: 36(KERNAL entry) + 19(dispatch) + 14(pass1+JMP)
+        ;     + 22($EA81 exit) = 91 cy.  Overflows raster 137 by 91-63 = 28.
+        ;   RTI at cycle 28 of raster 138.  Raster 138 IRQ is already pending
+        ;   → fires immediately (no main-loop jitter added).
+        ;   Pass 2: 36(KERNAL entry) + 20(dispatch to here) = 56 cy from
+        ;     cycle 28 = cycle 84 = cycle 21 of raster 139.
+        ;   Jitter: ±0-2 from pass 1's initial trigger.
         ;
-        ; We're at cycle ~54 of raster 138.
+        ; We're at cycle ~21 of raster 139.
         ;
-        ; Set CSEL=1 now so VIC sees 40-col mode at cycle 53 of raster 139.
-        ; Without this, CSEL=0 would cause the $14F comparison to match at
-        ; cycle 53, setting the border flip-flop before we can dodge.
-        lda #CTRL2_40COL            ; 2 cy → cycle 56
-        sta VIC_CTRL2               ; 4 cy → cycle 60 (CSEL now 1)
+        ; Set CSEL=1 so VIC sees 40-col mode at cycle 53.
+        lda #CTRL2_40COL            ; 2 cy
+        sta VIC_CTRL2               ; 4 cy (CSEL now 1)
         ; Reset pass for next frame
-        lda #0                      ; 2 cy → cycle 62
-        sta csel_pass               ; 3 cy → wraps into raster 139, done at cy 2
+        lda #0                      ; 2 cy
+        sta csel_pass               ; 3 cy
+        ;   Setup total: 11 cy → now at cycle ~32 of raster 139.
         ;
-        ; From cycle 2 of raster 139, target dodge write at cycle 53:
-        ;   LDA(2)+STA(4)=6 cy, write on STA's 4th cycle = LDA_start + 5.
-        ;   LDA starts at 53 - 5 = 48.  Waste: 48 - 2 = 46 cy = 23 NOPs.
+        ; Target dodge write at cycle 53:
+        ;   LDA(2)+STA(write at +3) = 5 cy from LDA start.
+        ;   LDA starts at 53 - 5 = 48.  Waste: 48 - 32 = 16 cy = 8 NOPs.
+        ;
+        ; Jitter check: entry 21/22/23 → write at 53/54/55.  All in window. ✓
 
-        ; -- 23 NOPs = 46 cycles --
-        .repeat 23
+        ; -- 8 NOPs = 16 cycles --
+        .repeat 8
         nop
         .endrepeat
 
-        ; First dodge: LDA + STA writes CSEL=0 at ~cycle 53 of raster 139.
+        ; First dodge: writes CSEL=0 at cycle 53 of raster 139 (±0-2 jitter).
         ; VIC saw CSEL=1 at cycle 53 → skipped $14F check.
         ; VIC sees CSEL=0 at cycle 56 → checks $14F (already passed) → no match.
         ; Border flip-flop stays LOW → no left border on line 140.
