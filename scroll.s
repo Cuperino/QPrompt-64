@@ -200,6 +200,10 @@ start:
         lda #$03
         sta VIC_SPR_EN
 
+        ; Disable KERNAL cursor blink (prevents $EA31 from modifying screen RAM)
+        lda #$01
+        sta $CC                     ; $CC != 0 → cursor blink disabled
+
         ; ---- Install raster IRQ chain ----
         lda #$7F
         sta CIA1_ICR                ; disable CIA timer IRQs
@@ -724,7 +728,6 @@ irq_handler:
         lda #DARK_GRAY
         sta VIC_BG
         sta VIC_BORDER              ; border matches bg — appears transparent
-        lda #RASTER_ZONE_OFF
 
         ; Next: CSEL first pass at raster 137
         lda #RASTER_CSEL_1ST
@@ -733,7 +736,10 @@ irq_handler:
         sta irq_state
         lda #0
         sta csel_pass
-        jmp $EA31
+        jmp $EA81                   ; quick RTI — no KERNAL handler;
+                                    ; $EA31 would run keyboard scan (~1000 cy
+                                    ; with key pressed) and risk overshooting
+                                    ; raster 137 (CSEL first pass)
 
 @state1:
         ; --- State 1: zone end (raster 175) ---
@@ -744,7 +750,9 @@ irq_handler:
         sta VIC_RASTER
         lda #2
         sta irq_state
-        jmp $EA31
+        jmp $EA81                   ; quick RTI — KERNAL handler only runs
+                                    ; from State 2 (raster 250, bottom border)
+                                    ; to avoid any side effects during visible area
 
 @state2:
         ; --- State 2: scroll update (raster 250) ---
@@ -1064,7 +1072,11 @@ irq_handler:
         lda #1
         sta irq_state
 
-        jmp $EA31
+        jmp $EA81                   ; quick RTI — no KERNAL handler;
+                                    ; CSEL loop ends at ~raster 160, and
+                                    ; $EA31 keyboard scan (~1000 cy with key
+                                    ; pressed) would overshoot raster 175
+                                    ; (State 1 zone-off), growing the gray zone
 
 
 ; ---- Coarse scroll ----------------------------------------------------------
@@ -1484,6 +1496,10 @@ switch_to_config:
         sta scroll_accum
         sta do_coarse
         sta do_coarse_down
+
+        ; Disable cursor blink again (config screen re-enabled KERNAL)
+        lda #$01
+        sta $CC
 
         ; Re-disable CIA1, enable VIC raster
         lda #$7F
