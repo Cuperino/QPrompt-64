@@ -1062,34 +1062,41 @@ scroll_screen_down:
 @no_wrap_down:
 
         ; Copy screen rows DOWN: row 23→24, 22→23, ..., 0→1
-        ; Must copy from bottom to top to avoid overwriting source data.
-        ; Page 3: bytes 768-999 (rows 19-24)
-        ldx #((ROWS-1)*SCREEN_COLS - 768 - 1)  ; 231
-@d3:    lda SCREEN+768, x
+        ; Must iterate high-to-low to avoid overwriting source data.
+        ; Uses dex-before-body + bne to handle full 0-255 range
+        ; (bpl fails for X > 127 since bit 7 is set).
+
+        ; Page 3: 192 bytes (offsets 768-959 → 808-999)
+        ldx #((ROWS-1)*SCREEN_COLS - 768)   ; 192
+@d3:    dex
+        lda SCREEN+768, x
         sta SCREEN+768+SCREEN_COLS, x
-        dex
-        bpl @d3
+        txa                         ; set Z flag from X, not from lda
+        bne @d3
 
-        ; Page 2: bytes 512-767
-        ldx #255
-@d2:    lda SCREEN+512, x
+        ; Page 2: 256 bytes (offsets 512-767 → 552-807)
+        ldx #0
+@d2:    dex
+        lda SCREEN+512, x
         sta SCREEN+512+SCREEN_COLS, x
-        dex
-        bpl @d2
+        txa
+        bne @d2
 
-        ; Page 1: bytes 256-511
-        ldx #255
-@d1:    lda SCREEN+256, x
+        ; Page 1: 256 bytes (offsets 256-511 → 296-551)
+        ldx #0
+@d1:    dex
+        lda SCREEN+256, x
         sta SCREEN+256+SCREEN_COLS, x
-        dex
-        bpl @d1
+        txa
+        bne @d1
 
-        ; Page 0: bytes 0-255
-        ldx #255
-@d0:    lda SCREEN, x
+        ; Page 0: 256 bytes (offsets 0-255 → 40-295)
+        ldx #0
+@d0:    dex
+        lda SCREEN, x
         sta SCREEN+SCREEN_COLS, x
-        dex
-        bpl @d0
+        txa
+        bne @d0
 
         ; Fill top row (row 0) with text from text_ptr - 25*COLS
         ; Compute source address: text_ptr - 1000
