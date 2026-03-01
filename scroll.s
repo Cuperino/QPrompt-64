@@ -262,8 +262,8 @@ clear_screen:
         inx
         bne @cs1
 
-        ; Colour RAM: rows 0-7 = white (bytes 0-319)
-        ;            rows 8-14 = light gray (bytes 320-599)
+        ; Colour RAM: rows 0-8 = white (bytes 0-359)
+        ;            rows 9-14 = light gray (bytes 360-599)
         ;            rows 15-24 = white (bytes 600-999)
         ; Split across pages since X is 8-bit only.
 
@@ -274,18 +274,18 @@ clear_screen:
         inx
         bne @cr0
 
-        ; Bytes 256-319: rest of row7 (still white), 0-63 past page 1
+        ; Bytes 256-359: rest of rows 7-8 (still white), 0-103 past page 1
         lda #WHITE
         ldx #0
 @cr1a:  sta COLRAM+256, x
         inx
-        cpx #64
+        cpx #104
         bne @cr1a
 
-        ; Bytes 320-511: rows 8-12 completely within page 1+2 overlap
-        ;   (320-511 = page 1 offsets 64-255 = bytes 320..511 → light gray)
+        ; Bytes 360-511: rows 9-12 within page 1+2 overlap
+        ;   (360-511 = page 1 offsets 104-255 = bytes 360..511 → light gray)
         lda #LIGHT_GRAY
-        ldx #64
+        ldx #104
 @cr1b:  sta COLRAM+256, x
         inx
         bne @cr1b              ; wraps at 256, covers 64-255 = bytes 320-511
