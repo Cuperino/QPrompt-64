@@ -46,6 +46,18 @@ VIC_SPR0_COL    = $D027
 VIC_SPR1_COL    = $D028
 
 CIA1_ICR        = $DC0D
+SHIFT_FLAG      = $028D             ; KERNAL shift key status (bit 0 = SHIFT)
+CURR_KEY        = $CB               ; KERNAL current key matrix code ($40 = none)
+
+; BASIC ROM floating-point routines
+GIVAYF          = $B391             ; signed int A(hi)/Y(lo) → FAC
+MOVFM           = $BBA2             ; load 5-byte float at A(lo)/Y(hi) → FAC
+MOVFA           = $BC0C             ; copy FAC → ARG
+FPWRT           = $BF7B             ; FAC = ARG ^ FAC
+FMULT           = $BA28             ; FAC = FAC * float at A(lo)/Y(hi)
+GETADR          = $B7F7             ; FAC → unsigned 16-bit in $14(lo)/$15(hi)
+FOUT            = $BDDD             ; FAC → PETSCII string at $0100
+MOVMF           = $BBD4             ; store FAC → 5-byte float at X(lo)/Y(hi)
 
 SCREEN          = $0400
 COLRAM          = $D800
@@ -87,8 +99,12 @@ fine_scroll:    .res 1              ; current fine-scroll value (7..0)
 text_lo:        .res 1              ; pointer into text_data (low)
 text_hi:        .res 1              ; pointer into text_data (high)
 irq_state:      .res 1              ; 0=zone_on, 1=zone_off, 2=scroll
-do_coarse:      .res 1              ; non-zero = coarse scroll pending
+do_coarse:      .res 1              ; pending forward coarse scroll count
 csel_pass:      .res 1              ; 0 = first IRQ (re-arm), 1 = second (do work)
+current_step:   .res 1              ; current velocity step (0-9)
+direction:      .res 1              ; 1=forward (up), $FF=reverse (down)
+scroll_accum:   .res 1              ; fractional accumulator (8.8 low byte)
+do_coarse_down: .res 1              ; pending reverse coarse scroll count
 
 ; ---------------------------------------------------------------------------
 ;  PRG load address (consumed by LOAD, not part of memory image)
@@ -116,6 +132,10 @@ csel_pass:      .res 1              ; 0 = first IRQ (re-arm), 1 = second (do wor
 
 ; ---- entry point -----------------------------------------------------------
 start:
+        ; --- Config screen (runs with KERNAL IRQs still active) ---
+        jsr config_screen
+        jsr build_velocity_table
+
         sei
 
         ; Black border and background
@@ -123,12 +143,20 @@ start:
         sta VIC_BORDER
         sta VIC_BG
 
-        ; Clear screen with spaces and set colour RAM to light green
+        ; Clear screen with spaces and set colour RAM
         jsr clear_screen
 
         ; Initialise scroll state
         lda #7
         sta fine_scroll
+        lda #3                      ; default step 3 (moderate speed)
+        sta current_step
+        lda #1                      ; forward direction
+        sta direction
+        lda #0
+        sta scroll_accum
+        sta do_coarse
+        sta do_coarse_down
 
         lda #<text_data
         sta text_lo
@@ -197,14 +225,20 @@ start:
 
         cli
 
-; Main idle loop — 6-cycle iteration (LDA zp=3, BEQ=3 taken)
-; This bounds IRQ jitter to 0-2 cycles from a 3-cycle instruction.
+; Main idle loop — all instructions ≤3 cycles, bounding IRQ jitter to ≤2 cy.
 @forever:
         lda do_coarse               ; 3 cy
-        beq @forever                ; 3 cy (taken)
-        lda #0
-        sta do_coarse
+        bne @do_up                  ; 2 cy (not taken)
+        lda do_coarse_down          ; 3 cy
+        bne @do_down                ; 2 cy (not taken)
+        jmp @forever                ; 3 cy
+@do_up:
+        dec do_coarse
         jsr scroll_screen_up
+        jmp @forever
+@do_down:
+        dec do_coarse_down
+        jsr scroll_screen_down
         jmp @forever
 
 
@@ -272,6 +306,276 @@ clear_screen:
         rts
 
 
+; ---- Config screen ---------------------------------------------------------
+; Displays baseSpeed and accelerationCurvature, lets user adjust with
+; cursor keys, and starts scrolling on RETURN.
+;   UP/DOWN    = baseSpeed ± 0.25
+;   LEFT/RIGHT = curvature ± 0.05
+;   RETURN     = start scrolling
+; ---------------------------------------------------------------------------
+KERNAL_GETIN    = $FFE4
+KERNAL_CHROUT   = $FFD2
+PETSCII_RETURN  = $0D
+PETSCII_UP      = $91
+PETSCII_DOWN    = $11
+PETSCII_LEFT    = $9D
+PETSCII_RIGHT   = $1D
+
+config_screen:
+        ; Initialize config floats from ROM defaults
+        ldx #4
+@cp_bs: lda fp_1_0, x
+        sta cfg_base_speed, x
+        dex
+        bpl @cp_bs
+        ldx #4
+@cp_ac: lda fp_1_15, x
+        sta cfg_accel_curv, x
+        dex
+        bpl @cp_ac
+
+        jsr @draw_config
+@cfg_loop:
+        jsr KERNAL_GETIN
+        beq @cfg_loop               ; no key → keep waiting
+
+        cmp #PETSCII_RETURN
+        bne @not_return
+        jmp @cfg_done
+@not_return:
+        cmp #PETSCII_UP
+        beq @inc_speed
+        cmp #PETSCII_DOWN
+        beq @dec_speed
+        cmp #PETSCII_RIGHT
+        beq @inc_curv
+        cmp #PETSCII_LEFT
+        beq @dec_curv
+        jmp @cfg_loop
+
+@inc_speed:
+        ; cfg_base_speed += 0.25
+        lda #<cfg_base_speed
+        ldy #>cfg_base_speed
+        jsr MOVFM
+        lda #<fp_0_25
+        ldy #>fp_0_25
+        jsr $B867                   ; FADD: FAC = FAC + float at (A/Y)
+        ldx #<cfg_base_speed
+        ldy #>cfg_base_speed
+        jsr MOVMF
+        jsr @draw_config
+        jmp @cfg_loop
+
+@dec_speed:
+        ; cfg_base_speed -= 0.25
+        lda #<fp_0_25
+        ldy #>fp_0_25
+        jsr MOVFM                   ; FAC = 0.25
+        lda #<cfg_base_speed
+        ldy #>cfg_base_speed
+        jsr $B850                   ; FSUB: FAC = (A/Y) - FAC = speed - 0.25
+        ; Clamp: if result <= 0, set to 0.25
+        lda $61                     ; FAC exponent
+        beq @clamp_speed_lo         ; zero → clamp
+        lda $66                     ; sign: $FF = negative
+        bmi @clamp_speed_lo
+        ldx #<cfg_base_speed
+        ldy #>cfg_base_speed
+        jsr MOVMF
+        jsr @draw_config
+        jmp @cfg_loop
+@clamp_speed_lo:
+        ldx #4
+@csl:   lda fp_0_25, x
+        sta cfg_base_speed, x
+        dex
+        bpl @csl
+        jsr @draw_config
+        jmp @cfg_loop
+
+@inc_curv:
+        ; cfg_accel_curv += 0.05
+        lda #<cfg_accel_curv
+        ldy #>cfg_accel_curv
+        jsr MOVFM
+        lda #<fp_0_05
+        ldy #>fp_0_05
+        jsr $B867                   ; FADD
+        ldx #<cfg_accel_curv
+        ldy #>cfg_accel_curv
+        jsr MOVMF
+        jsr @draw_config
+        jmp @cfg_loop
+
+@dec_curv:
+        ; cfg_accel_curv -= 0.05
+        lda #<fp_0_05
+        ldy #>fp_0_05
+        jsr MOVFM
+        lda #<cfg_accel_curv
+        ldy #>cfg_accel_curv
+        jsr $B850                   ; FSUB: FAC = curv - 0.05
+        lda $61
+        beq @clamp_curv_lo
+        lda $66
+        bmi @clamp_curv_lo
+        ldx #<cfg_accel_curv
+        ldy #>cfg_accel_curv
+        jsr MOVMF
+        jsr @draw_config
+        jmp @cfg_loop
+@clamp_curv_lo:
+        ldx #4
+@ccl:   lda fp_1_0, x
+        sta cfg_accel_curv, x
+        dex
+        bpl @ccl
+        jsr @draw_config
+        jmp @cfg_loop
+
+@cfg_done:
+        rts
+
+; --- Draw config screen ---
+@draw_config:
+        ; Clear screen
+        lda #$20
+        ldx #0
+@dcs:   sta SCREEN, x
+        sta SCREEN+256, x
+        sta SCREEN+512, x
+        sta SCREEN+744, x
+        inx
+        bne @dcs
+
+        ; Row 2: "BASE SPEED:"
+        ldx #0
+@bs_l:  lda @str_base_speed, x
+        beq @bs_done
+        sta SCREEN + 2*40 + 2, x
+        inx
+        bne @bs_l
+@bs_done:
+        ; Display baseSpeed value at row 2, col 20
+        lda #<cfg_base_speed
+        ldy #>cfg_base_speed
+        jsr MOVFM
+        jsr FOUT                    ; returns A(lo)/Y(hi) → string at $0100
+        ; Copy PETSCII string to screen (convert PETSCII to screen codes)
+        sty zp_src+1
+        sta zp_src
+        ldy #0
+@bsv:   lda (zp_src), y
+        beq @bsv_done
+        jsr @petscii_to_screen
+        sta SCREEN + 2*40 + 20, y
+        iny
+        bne @bsv
+@bsv_done:
+
+        ; Row 4: "ACCEL CURVE:"
+        ldx #0
+@ac_l:  lda @str_accel_curv, x
+        beq @ac_done
+        sta SCREEN + 4*40 + 2, x
+        inx
+        bne @ac_l
+@ac_done:
+        ; Display curvature value at row 4, col 20
+        lda #<cfg_accel_curv
+        ldy #>cfg_accel_curv
+        jsr MOVFM
+        jsr FOUT
+        sty zp_src+1
+        sta zp_src
+        ldy #0
+@acv:   lda (zp_src), y
+        beq @acv_done
+        jsr @petscii_to_screen
+        sta SCREEN + 4*40 + 20, y
+        iny
+        bne @acv
+@acv_done:
+
+        ; Row 8: instructions
+        ldx #0
+@in1:   lda @str_instr1, x
+        beq @in1d
+        sta SCREEN + 8*40 + 2, x
+        inx
+        bne @in1
+@in1d:
+        ldx #0
+@in2:   lda @str_instr2, x
+        beq @in2d
+        sta SCREEN + 9*40 + 2, x
+        inx
+        bne @in2
+@in2d:
+        ldx #0
+@in3:   lda @str_instr3, x
+        beq @in3d
+        sta SCREEN + 10*40 + 2, x
+        inx
+        bne @in3
+@in3d:
+
+        ; Set all color RAM to white
+        lda #WHITE
+        ldx #0
+@ccr:   sta COLRAM, x
+        sta COLRAM+256, x
+        sta COLRAM+512, x
+        sta COLRAM+744, x
+        inx
+        bne @ccr
+        rts
+
+; Convert PETSCII character in A to screen code (simple subset)
+@petscii_to_screen:
+        cmp #$30                    ; '0'-'9' ($30-$39)
+        bcc @pts_other
+        cmp #$3A
+        bcs @pts_alpha
+        sec
+        sbc #$30                    ; screen code for digits = $30-$39 → $00-$09
+        ora #$30                    ; actually digits are same: PETSCII $30=$30 screen
+        rts
+@pts_alpha:
+        cmp #$41                    ; 'A'-'Z' ($41-$5A)
+        bcc @pts_other
+        cmp #$5B
+        bcs @pts_other
+        sec
+        sbc #$40                    ; PETSCII $41 → screen code $01
+        rts
+@pts_other:
+        cmp #$20                    ; space
+        beq @pts_ret
+        cmp #$2E                    ; '.'
+        beq @pts_ret
+        cmp #$2D                    ; '-' (minus sign, PETSCII $2D)
+        bne @pts_space
+        rts
+@pts_space:
+        lda #$20                    ; default to space
+@pts_ret:
+        rts
+
+; Config screen strings (screen codes, null-terminated)
+@str_base_speed:
+        .byte sc_B,sc_A,sc_S,sc_E,__,sc_S,sc_P,sc_E,sc_E,sc_D,$3A,0
+@str_accel_curv:
+        .byte sc_A,sc_C,sc_C,sc_E,sc_L,__,sc_C,sc_U,sc_R,sc_V,sc_E,$3A,0
+@str_instr1:
+        .byte sc_U,sc_P,$2F,sc_D,sc_O,sc_W,sc_N,__,$3D,__,sc_B,sc_A,sc_S,sc_E,__,sc_S,sc_P,sc_E,sc_E,sc_D,0
+@str_instr2:
+        .byte sc_L,sc_E,sc_F,sc_T,$2F,sc_R,sc_I,sc_G,sc_H,sc_T,__,$3D,__,sc_C,sc_U,sc_R,sc_V,sc_A,sc_T,sc_U,sc_R,sc_E,0
+@str_instr3:
+        .byte sc_R,sc_E,sc_T,sc_U,sc_R,sc_N,__,$3D,__,sc_S,sc_T,sc_A,sc_R,sc_T,0
+
+
 ; =============================================================================
 ; Raster IRQ handler — 5-point chain (including double-IRQ for CSEL)
 ;
@@ -290,11 +594,15 @@ irq_handler:
 
         lda irq_state
         cmp #3
-        beq @state3                 ; most time-critical — check first
+        bne @not_state3
+        jmp @state3                 ; most time-critical
+@not_state3:
         cmp #1
         beq @state1
         cmp #2
-        beq @state2
+        bne @state0
+        jmp @state2
+@state0:
 
         ; --- State 0: zone start (raster 119) ---
         lda #DARK_GRAY
@@ -324,31 +632,60 @@ irq_handler:
 
 @state2:
         ; --- State 2: scroll update (raster 250) ---
-        ; Reset next IRQ to zone start, return FAST — no heavy work here.
         lda #RASTER_ZONE_ON
         sta VIC_RASTER
         lda #0
         sta irq_state
 
-        ; Decrement fine scroll and update $D011 immediately
+        ; --- Read keyboard and update step/direction ---
+        jsr read_keyboard
+
+        ; --- Accumulate velocity ---
+        ldx current_step
+        clc
+        lda scroll_accum
+        adc velocity_lo, x
+        sta scroll_accum
+        lda velocity_hi, x
+        adc #0                      ; A = integer pixels to scroll
+        beq @s2_done                ; 0 pixels → skip
+
+        tax                         ; X = pixel count
+        lda direction
+        bmi @s2_reverse
+
+        ; --- Forward: decrement fine_scroll, coarse up on underflow ---
+@s2_fwd:
         dec fine_scroll
         lda fine_scroll
-        bpl @update
-
-        ; Coarse scroll needed — just set the flag, main loop handles it
+        bpl @s2_fwd_next
         lda #7
         sta fine_scroll
-        lda #7
-        ora #%00010000
-        sta VIC_CTRL1
-        lda #1
-        sta do_coarse
-        jmp $EA31
+        inc do_coarse
+@s2_fwd_next:
+        dex
+        bne @s2_fwd
+        jmp @s2_update_vic
 
-@update:
+        ; --- Reverse: increment fine_scroll, coarse down on overflow ---
+@s2_reverse:
+@s2_rev:
+        inc fine_scroll
+        lda fine_scroll
+        cmp #8
+        bcc @s2_rev_next
+        lda #0
+        sta fine_scroll
+        inc do_coarse_down
+@s2_rev_next:
+        dex
+        bne @s2_rev
+
+@s2_update_vic:
         lda fine_scroll
         ora #%00010000
         sta VIC_CTRL1
+@s2_done:
         jmp $EA31
 
 ; ---------------------------------------------------------------------------
@@ -691,6 +1028,265 @@ scroll_screen_up:
         rts
 
 
+; ---- Coarse scroll down (reverse) -----------------------------------------
+; Shifts all screen rows down by one and fills the top row (row 0) with
+; text data from text_ptr - 25*COLS.  Decrements text_ptr with wrapping.
+; ---------------------------------------------------------------------------
+scroll_screen_down:
+        ; First, retreat text pointer by COLS (undo one advance)
+        sec
+        lda text_lo
+        sbc #COLS
+        sta text_lo
+        lda text_hi
+        sbc #0
+        sta text_hi
+
+        ; Wrap check: if text_ptr < text_data, wrap to end
+        lda text_hi
+        cmp #>text_data
+        bcc @wrap_down              ; hi byte below → wrap
+        bne @no_wrap_down           ; hi byte above → ok
+        lda text_lo
+        cmp #<text_data
+        bcs @no_wrap_down           ; lo byte >= → ok
+@wrap_down:
+        ; Wrap to text_data_end - COLS
+        sec
+        lda #<text_data_end
+        sbc #COLS
+        sta text_lo
+        lda #>text_data_end
+        sbc #0
+        sta text_hi
+@no_wrap_down:
+
+        ; Copy screen rows DOWN: row 23→24, 22→23, ..., 0→1
+        ; Must copy from bottom to top to avoid overwriting source data.
+        ; Page 3: bytes 768-999 (rows 19-24)
+        ldx #((ROWS-1)*SCREEN_COLS - 768 - 1)  ; 231
+@d3:    lda SCREEN+768, x
+        sta SCREEN+768+SCREEN_COLS, x
+        dex
+        bpl @d3
+
+        ; Page 2: bytes 512-767
+        ldx #255
+@d2:    lda SCREEN+512, x
+        sta SCREEN+512+SCREEN_COLS, x
+        dex
+        bpl @d2
+
+        ; Page 1: bytes 256-511
+        ldx #255
+@d1:    lda SCREEN+256, x
+        sta SCREEN+256+SCREEN_COLS, x
+        dex
+        bpl @d1
+
+        ; Page 0: bytes 0-255
+        ldx #255
+@d0:    lda SCREEN, x
+        sta SCREEN+SCREEN_COLS, x
+        dex
+        bpl @d0
+
+        ; Fill top row (row 0) with text from text_ptr - 25*COLS
+        ; Compute source address: text_ptr - 1000
+        sec
+        lda text_lo
+        sbc #<1000
+        sta zp_src
+        lda text_hi
+        sbc #>1000
+        sta zp_src+1
+
+        ; Handle wrap: if source < text_data, add text length
+        lda zp_src+1
+        cmp #>text_data
+        bcc @src_wrap
+        bne @src_ok
+        lda zp_src
+        cmp #<text_data
+        bcs @src_ok
+@src_wrap:
+        ; source += (text_data_end - text_data)
+        clc
+        lda zp_src
+        adc #<(text_data_end - text_data)
+        sta zp_src
+        lda zp_src+1
+        adc #>(text_data_end - text_data)
+        sta zp_src+1
+@src_ok:
+        ldy #0
+@fill_top:
+        lda (zp_src), y
+        sta SCREEN, y
+        iny
+        cpy #COLS
+        bne @fill_top
+
+        ; Colour for new top row = white
+        lda #$0F
+        ldy #0
+@clr_top:
+        sta COLRAM, y
+        iny
+        cpy #COLS
+        bne @clr_top
+
+        rts
+
+
+; ---- Build velocity lookup table -------------------------------------------
+; Computes velocity_table[step] = baseSpeed * step^curvature * 256
+; using BASIC ROM floating-point routines.
+; Result is 8.8 fixed-point stored in velocity_hi/velocity_lo.
+; ---------------------------------------------------------------------------
+build_velocity_table:
+        ; Step 0 = still (already zeroed)
+        lda #0
+        sta velocity_lo
+        sta velocity_hi
+
+        ldx #1                      ; start from step 1
+@loop:
+        stx @save_x + 1            ; self-mod: save loop counter
+
+        ; Convert step (X) to float → FAC
+        lda #0                      ; high byte = 0
+        txa
+        tay                         ; Y = low byte = step
+        lda #0                      ; A = high byte
+        jsr GIVAYF                  ; FAC = step
+
+        ; Copy FAC → ARG (base for power function)
+        jsr MOVFA
+
+        ; Load accelerationCurvature → FAC (exponent)
+        lda #<cfg_accel_curv
+        ldy #>cfg_accel_curv
+        jsr MOVFM
+
+        ; FAC = ARG ^ FAC = step ^ curvature
+        jsr FPWRT
+
+        ; FAC *= baseSpeed
+        lda #<cfg_base_speed
+        ldy #>cfg_base_speed
+        jsr FMULT
+
+        ; FAC *= 256 (convert to 8.8 fixed-point units)
+        lda #<fp_256
+        ldy #>fp_256
+        jsr FMULT
+
+        ; Convert FAC → 16-bit unsigned integer in $14(lo)/$15(hi)
+        jsr GETADR
+
+@save_x:
+        ldx #0                      ; restored by self-mod above
+        lda $14                     ; low byte (fractional part)
+        sta velocity_lo, x
+        lda $15                     ; high byte (integer pixels)
+        sta velocity_hi, x
+
+        inx
+        cpx #10
+        bne @loop
+        rts
+
+
+; ---- Read keyboard ---------------------------------------------------------
+; Reads KERNAL's current key ($CB) and maps to step (0-9).
+; Reads SHIFT flag ($028D) for direction.
+; Only updates current_step when a recognized number key is detected.
+; ---------------------------------------------------------------------------
+read_keyboard:
+        ; --- Direction from SHIFT status ---
+        lda SHIFT_FLAG
+        and #$01                    ; bit 0 = SHIFT (includes SHIFT LOCK)
+        beq @dir_fwd
+        lda #$FF                    ; reverse
+        sta direction
+        jmp @check_key
+@dir_fwd:
+        lda #$01
+        sta direction
+
+@check_key:
+        lda CURR_KEY                ; current key matrix code
+        cmp #$40                    ; no key pressed
+        beq @rk_done
+
+        ; Compare against number key matrix codes
+        cmp #$38                    ; key "1" → step 0 (still)
+        bne @not1
+        lda #0
+        sta current_step
+        rts
+@not1:  cmp #$3B                    ; key "2" → step 1
+        bne @not2
+        lda #1
+        sta current_step
+        rts
+@not2:  cmp #$08                    ; key "3" → step 2
+        bne @not3
+        lda #2
+        sta current_step
+        rts
+@not3:  cmp #$0B                    ; key "4" → step 3
+        bne @not4
+        lda #3
+        sta current_step
+        rts
+@not4:  cmp #$10                    ; key "5" → step 4
+        bne @not5
+        lda #4
+        sta current_step
+        rts
+@not5:  cmp #$13                    ; key "6" → step 5
+        bne @not6
+        lda #5
+        sta current_step
+        rts
+@not6:  cmp #$18                    ; key "7" → step 6
+        bne @not7
+        lda #6
+        sta current_step
+        rts
+@not7:  cmp #$1B                    ; key "8" → step 7
+        bne @not8
+        lda #7
+        sta current_step
+        rts
+@not8:  cmp #$20                    ; key "9" → step 8
+        bne @not9
+        lda #8
+        sta current_step
+        rts
+@not9:  cmp #$23                    ; key "0" → step 9
+        bne @rk_done
+        lda #9
+        sta current_step
+@rk_done:
+        rts
+
+
+; ---------------------------------------------------------------------------
+;  Velocity lookup table — computed at startup by build_velocity_table
+;  10 entries (steps 0-9), 8.8 fixed-point format
+; ---------------------------------------------------------------------------
+velocity_lo:    .byte 0,0,0,0,0,0,0,0,0,0
+velocity_hi:    .byte 0,0,0,0,0,0,0,0,0,0
+
+; ---------------------------------------------------------------------------
+;  Writable copies of float parameters (modified by config screen)
+; ---------------------------------------------------------------------------
+cfg_base_speed: .byte $81,$00,$00,$00,$00       ; 1.0 (default)
+cfg_accel_curv: .byte $81,$13,$33,$33,$33       ; 1.15 (default)
+
 ; =============================================================================
 ;  Text data — Lorem Ipsum in C64 screen codes
 ;  Screen codes: A-Z = $01-$1A, space=$20, comma=$2C, period=$2E
@@ -727,6 +1323,13 @@ sc_Z = $1A
 __ = $20       ; space
 _c = $2C       ; comma
 _d = $2E       ; period
+
+; BASIC ROM 5-byte float constants
+fp_256:         .byte $89,$00,$00,$00,$00       ; 256.0 (for 8.8 conversion)
+fp_0_25:        .byte $7C,$4C,$CC,$CC,$CD       ; 0.05 (baseSpeed step)
+fp_0_05:        .byte $7C,$4C,$CC,$CC,$CD       ; 0.05 (curvature step)
+fp_1_0:         .byte $81,$00,$00,$00,$00       ; 1.5 (initial baseSpeed)
+fp_1_15:        .byte $81,$13,$33,$33,$33       ; 1.15 (initial curvature)
 
 ; Blank row macro
 .define BLK __,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
