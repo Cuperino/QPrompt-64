@@ -1680,33 +1680,6 @@ fp_100:         .byte $87,$48,$00,$00,$00       ; 100.0 (for N.NN display)
 .define BLK __,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
 
 text_data:
-; --- 25 blank rows: text scrolls in from below the visible screen ---
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-.byte BLK
-
 ; --- Paragraph 1 ---
 ;         1234567890123456789012345678901234567890
 ; LINE:  "LOREM IPSUM DOLOR SIT AMET,             "
