@@ -6,20 +6,8 @@
 ;  scrolling ($D011 bits 0-2) with a raster interrupt.  Text enters from
 ;  the bottom of the screen and exits above the top, then loops.
 ;
-;  LEFT BORDER OPEN via right-border-dodge (CSEL trick):
-;  To keep sprite 0 visible at X=0, we prevent the border flip-flop from
-;  being SET at the right edge of lines 139-159.  This keeps the border off
-;  for lines 140-160 (the 21 sprite pixel rows).
-;
-;  Technique per sprite line:
-;    end of previous line — dodge right border comparison by switching
-;    CSEL 1→0 between the two comparison cycles (53 and 56 on PAL).
-;    The VIC misses both checks → border FF stays LOW → no left border.
-;    Then early in the sprite line, restore CSEL=1 for 40-col display.
-;
-;  Double-IRQ stabilisation: first IRQ at raster 137 re-arms to 138.
-;  Second IRQ fires with ≤2-cycle jitter (main loop = 3-cycle instrs).
-;  The 3-cycle dodge window absorbs this jitter.
+;  Border color indicator: a 12-line light blue band on both borders
+;  (rasters 140-151) marks the center of the reading zone.
 ; =============================================================================
 
         .setcpu "6502"
@@ -63,7 +51,7 @@ SCREEN          = $0400
 COLRAM          = $D800
 SPR_PTR         = SCREEN + $03F8
 
-COLS            = 40                ; visible columns (38-col mode)
+COLS            = 40
 SCREEN_COLS     = 40                ; screen memory stride (always 40)
 ROWS            = 25
 ; TOTAL_BYTES     = ROWS * COLS
@@ -75,19 +63,11 @@ LIGHT_GRAY      = $01
 WHITE           = $0F
 
 ; Raster positions
-RASTER_ZONE_ON  = 119
-RASTER_ZONE_OFF = 175
-RASTER_SCROLL   = 250
-
-; Double-IRQ: first fires at 137, re-arms to 138 for stable second pass
-RASTER_CSEL_1ST = 137
-RASTER_CSEL_2ND = 138
-
-SPR_HEIGHT      = 21
-
-; CTRL2 values
-CTRL2_38COL     = $00               ; CSEL=0, XSCROLL=0  (38 cols)
-CTRL2_40COL     = $08               ; CSEL=1, XSCROLL=0  (40 cols)
+RASTER_ZONE_ON      = 123
+RASTER_INDICATOR_ON = 144
+RASTER_INDICATOR_OFF= 156
+RASTER_ZONE_OFF     = 179
+RASTER_SCROLL       = 250
 
 ; ---------------------------------------------------------------------------
 ;  Zero page
@@ -98,9 +78,8 @@ zp_dst:         .res 2              ; general purpose dest pointer
 fine_scroll:    .res 1              ; current fine-scroll value (7..0)
 text_lo:        .res 1              ; pointer into text_data (low)
 text_hi:        .res 1              ; pointer into text_data (high)
-irq_state:      .res 1              ; 0=zone_on, 1=zone_off, 2=scroll
+irq_state:      .res 1              ; 0=zone_on, 1=zone_off, 2=scroll, 3=indicator_on, 4=indicator_off
 do_coarse:      .res 1              ; pending forward coarse scroll count
-csel_pass:      .res 1              ; 0 = first IRQ (re-arm), 1 = second (do work)
 current_step:   .res 1              ; current velocity step (0-9)
 direction:      .res 1              ; 1=forward (up), $FF=reverse (down)
 scroll_accum:   .res 1              ; fractional accumulator (8.8 low byte)
@@ -165,8 +144,8 @@ start:
         lda #>text_data
         sta text_hi
 
-        ; --- Horizontal scroll: 40-col mode (CSEL trick steady state) ---
-        lda #CTRL2_40COL            ; CSEL=1, XSCROLL=0
+        ; 40-col mode
+        lda #$08                    ; CSEL=1, XSCROLL=0
         sta VIC_CTRL2
 
         ; --- Set up sprites ---
@@ -177,9 +156,9 @@ start:
         sta SPR_PTR+1               ; Sprite 1 = left-pointing triangle
 
         ; Sprite positions — vertically centered
-        lda #00                     ; X = left edge of visible area
+        lda #24                     ; X = left edge of visible area
         sta VIC_SPR0_X
-        lda #88                     ; X = 344 (256+88), right edge
+        lda #65                     ; X = 344 (256+88), right edge
         sta VIC_SPR1_X
         lda #$02                    ; MSB bit 1 set for sprite 1 (X>255)
         sta VIC_SPR_XMSB
@@ -215,7 +194,6 @@ start:
         ; Start with zone-on IRQ at raster 119
         lda #0
         sta irq_state
-        sta csel_pass
 
         lda VIC_CTRL1
         and #$7F                    ; clear raster bit 8
@@ -262,13 +240,13 @@ clear_screen:
 @cs1:   sta SCREEN, x
         sta SCREEN+256, x
         sta SCREEN+512, x
-        sta SCREEN+744, x
+        sta SCREEN+768, x
         inx
         bne @cs1
 
         ; Colour RAM: rows 0-8 = white (bytes 0-359)
-        ;            rows 9-14 = light gray (bytes 360-599)
-        ;            rows 15-24 = white (bytes 600-999)
+        ;            rows 9-15 = light gray (bytes 360-639)
+        ;            rows 16-24 = white (bytes 640-999)
         ; Split across pages since X is 8-bit only.
 
         ; Bytes 0-255: rows 0-6 (all white)
@@ -278,7 +256,7 @@ clear_screen:
         inx
         bne @cr0
 
-        ; Bytes 256-359: rest of rows 7-8 (still white), 0-103 past page 1
+        ; Bytes 256-359: rows 7-8 (still white)
         lda #WHITE
         ldx #0
 @cr1a:  sta COLRAM+256, x
@@ -286,35 +264,34 @@ clear_screen:
         cpx #104
         bne @cr1a
 
-        ; Bytes 360-511: rows 9-12 within page 1+2 overlap
-        ;   (360-511 = page 1 offsets 104-255 = bytes 360..511 → light gray)
+        ; Bytes 360-511: rows 9-12 (light gray)
         lda #LIGHT_GRAY
         ldx #104
 @cr1b:  sta COLRAM+256, x
         inx
-        bne @cr1b              ; wraps at 256, covers 64-255 = bytes 320-511
+        bne @cr1b
 
-        ; Bytes 512-599: top of page 2 (offsets 0-87) = rows 12-14 (light gray)
+        ; Bytes 512-639: rows 12-15 (light gray)
         lda #LIGHT_GRAY
         ldx #0
 @cr2a:  sta COLRAM+512, x
         inx
-        cpx #88
+        cpx #128
         bne @cr2a
 
-        ; Bytes 600-767: offsets 88-255 in page2 = rows 15-19 (white)
+        ; Bytes 640-767: rows 16-19 (white)
         lda #WHITE
-        ldx #88
+        ldx #128
 @cr2b:  sta COLRAM+512, x
         inx
-        bne @cr2b              ; wraps at 256
+        bne @cr2b
 
-        ; Bytes 768-999: page 3 offsets 0-231 = rows 19-24 (white)
+        ; Bytes 768-999: rows 19-24 (white)
         lda #WHITE
         ldx #0
 @cr3:   sta COLRAM+744, x
         inx
-        cpx #232               ; 1000-768=232
+        cpx #232
         bne @cr3
         rts
 
@@ -697,49 +674,67 @@ display_fixed2:
 
 
 ; =============================================================================
-; Raster IRQ handler — 5-point chain (including double-IRQ for CSEL)
+; Raster IRQ handler — 5-point chain
 ;
 ; Per-frame order (ascending raster values):
-;   State 0 → raster 119  : zone on  (dark gray bg)
-;   State 3 → raster 137  : CSEL pass 1 (re-arm to 138, exit fast)
-;   State 3 → raster 138  : CSEL pass 2 (stable; unrolled border-open)
-;   State 1 → raster 175  : zone off (black bg)
+;   State 0 → raster 119  : zone on  (dark gray bg + border)
+;   State 3 → raster 140  : indicator on (light blue border)
+;   State 4 → raster 152  : indicator off (dark gray border)
+;   State 1 → raster 175  : zone off (black bg + border)
 ;   State 2 → raster 250  : scroll update
 ;
-; Chain: 0 → 3 → (3) → 1 → 2 → 0
+; Chain: 0 → 3 → 4 → 1 → 2 → 0
 ; =============================================================================
 irq_handler:
         lda #$01
         sta VIC_IRQ_STATUS          ; ack
 
         lda irq_state
-        cmp #3
-        bne @not_state3
-        jmp @state3                 ; most time-critical
-@not_state3:
+        cmp #2
+        bne @not_state2
+        jmp @state2
+@not_state2:
         cmp #1
         beq @state1
-        cmp #2
-        bne @state0
-        jmp @state2
+        cmp #3
+        beq @state3
+        cmp #4
+        beq @state4
 @state0:
 
         ; --- State 0: zone start (raster 119) ---
         lda #DARK_GRAY
         sta VIC_BG
-        sta VIC_BORDER              ; border matches bg — appears transparent
+        sta VIC_BORDER
 
-        ; Next: CSEL first pass at raster 137
-        lda #RASTER_CSEL_1ST
+        ; Next: indicator on at raster 140
+        lda #RASTER_INDICATOR_ON
         sta VIC_RASTER
         lda #3
         sta irq_state
-        lda #0
-        sta csel_pass
-        jmp $EA81                   ; quick RTI — no KERNAL handler;
-                                    ; $EA31 would run keyboard scan (~1000 cy
-                                    ; with key pressed) and risk overshooting
-                                    ; raster 137 (CSEL first pass)
+        jmp $EA81
+
+@state3:
+        ; --- State 3: indicator on (raster 140) ---
+        lda #LIGHT_BLUE
+        sta VIC_BORDER
+
+        lda #RASTER_INDICATOR_OFF
+        sta VIC_RASTER
+        lda #4
+        sta irq_state
+        jmp $EA81
+
+@state4:
+        ; --- State 4: indicator off (raster 152) ---
+        lda #DARK_GRAY
+        sta VIC_BORDER
+
+        lda #RASTER_ZONE_OFF
+        sta VIC_RASTER
+        lda #1
+        sta irq_state
+        jmp $EA81
 
 @state1:
         ; --- State 1: zone end (raster 175) ---
@@ -811,272 +806,6 @@ irq_handler:
         sta VIC_CTRL1
 @s2_done:
         jmp $EA31
-
-; ---------------------------------------------------------------------------
-; State 3: CSEL border-open
-; ---------------------------------------------------------------------------
-; The border main flip-flop is SET when X matches the right-border compare:
-;   CSEL=0 → x=$14F → cycle 53 (phi1)
-;   CSEL=1 → x=$158 → cycle 56 (phi1)
-; To dodge: have CSEL=1 at cycle 53, write CSEL=0 between cycle 53-56.
-; 6502 writes on phi2; VIC reads on phi1 of the NEXT cycle.
-; So a STA that completes at cycle 53 phi2 → VIC sees CSEL=0 from cycle 54.
-; Window: STA write at cycle 53, 54, or 55 (VIC sees change at 54, 55, 56).
-;   cycle 53: VIC@53 sees old CSEL=1 → no match for $14F. VIC@54 sees CSEL=0
-;             → $14F comparison: x@54 ≠ $14F. VIC@56 CSEL=0 → checks $14F
-;             not $158. OK, dodge works.
-;   cycle 55: VIC@55 still sees CSEL=1. VIC@56 sees CSEL=0 → checks $14F
-;             not $158. Still OK.
-;   cycle 56: VIC@56 still sees CSEL=1 → checks $158, x=$158 → MATCH → BAD!
-; So write must complete at cycle 53, 54, or 55. Window = 3 cycles.
-; With ≤2-cycle jitter from double-IRQ + 3-cycle main-loop instructions,
-; we can reliably hit this window.
-;
-@state3:
-        lda csel_pass
-        bne @csel_pass2
-
-        ; --- Pass 1 (raster 137): re-arm for raster 138, exit FAST ---
-        ; MUST use $EA81 (quick RTI), NOT $EA31 (full KERNAL handler).
-        ; $EA31 runs keyboard scan/jiffy clock (~300 cy), pushing pass 2
-        ; into raster 142+ and completely missing the dodge window.
-        lda #1
-        sta csel_pass
-        lda #RASTER_CSEL_2ND
-        sta VIC_RASTER
-        ; Stay in state 3
-        jmp $EA81               ; quick exit: PLA/TAY/PLA/TAX/PLA/RTI
-
-@csel_pass2:
-        ; --- Pass 2 (raster 138): stable entry, ≤2-cycle jitter ---
-        ;
-        ; Cycle accounting:
-        ;   Pass 1 total: 36(KERNAL entry) + 19(dispatch) + 14(pass1+JMP)
-        ;     + 22($EA81 exit) = 91 cy.  Overflows raster 137 by 91-63 = 28.
-        ;   RTI at cycle 28 of raster 138.  Raster 138 IRQ is already pending
-        ;   → fires immediately (no main-loop jitter added).
-        ;   Pass 2: 36(KERNAL entry) + 20(dispatch to here) = 56 cy from
-        ;     cycle 28 = cycle 84 = cycle 21 of raster 139.
-        ;   Jitter: ±0-2 from pass 1's initial trigger.
-        ;
-        ; We're at cycle ~21 of raster 139.
-        ;
-        ; Set CSEL=1 so VIC sees 40-col mode at cycle 53.
-        lda #CTRL2_40COL            ; 2 cy
-        sta VIC_CTRL2               ; 4 cy (CSEL now 1)
-        ; Reset pass for next frame
-        lda #0                      ; 2 cy
-        sta csel_pass               ; 3 cy
-        ;   Setup total: 11 cy → now at cycle ~32 of raster 139.
-        ;
-        ; Target dodge write at cycle 53:
-        ;   LDA(2)+STA(write at +3) = 5 cy from LDA start.
-        ;   LDA starts at 53 - 5 = 48.  Waste: 48 - 32 = 16 cy = 8 NOPs.
-        ;
-        ; Jitter check: entry 21/22/23 → write at 53/54/55.  All in window. ✓
-
-        ; -- 8 NOPs = 16 cycles --
-        .repeat 8
-        nop
-        .endrepeat
-
-        ; First dodge: writes CSEL=0 at cycle 53 of raster 139 (±0-2 jitter).
-        ; VIC saw CSEL=1 at cycle 53 → skipped $14F check.
-        ; VIC sees CSEL=0 at cycle 56 → checks $14F (already passed) → no match.
-        ; Border flip-flop stays LOW → no left border on line 140.
-        lda #CTRL2_38COL            ; 2 cy
-        sta VIC_CTRL2               ; 4 cy → write on 4th cy (the dodge)
-
-        ; ---------------------------------------------------------------
-        ; Now unroll 21 iterations (for rasters 140-160).
-        ; Each iteration = 63 cycles (one PAL line) and does:
-        ;   1. Waste until ~cycle 17 → restore CSEL=1 (40-col display)
-        ;   2. Waste until ~cycle 48 → write CSEL=0 (dodge right border)
-        ;
-        ; The first iteration's cycle 0 is right after the previous STA
-        ; completed.  We ended the dodge STA at cycle ~58 of raster 139,
-        ; so the next instruction starts at cycle ~58.
-        ; Remaining in raster 139: 63-58 = 5 cycles → that's cycles 58-62.
-        ; These 5 cycles are the "head" of the first iteration.
-        ; The iteration nominally goes from cycle 58 of line N to cycle 58
-        ; of line N+1 = 63 cycles total.
-        ;
-        ; Layout (63 cycles per iteration):
-        ;   From start (prev-line cycle 58):
-        ;     waste to reach restore point: need STA write at ~cycle 17
-        ;       of next line. Cycles available: (63-58) + 17 = 22 cycles
-        ;       to the STA write. STA write = 5 cy from LDA start.
-        ;       So LDA starts at 22-5 = 17 cycles from iter start.
-        ;       17/2 = 8 NOPs + 1 extra → 8 NOPs(16) + bit $EA(3) = 19. No.
-        ;       Actually 17 cycles: 8 NOPs(16) + ??? (1 cy) = impossible
-        ;       with standard instructions.  Let's use 7 NOPs (14) +
-        ;       BIT zp (3) = 17. ✓
-        ;
-        ;     lda #CTRL2_40COL      2 cy
-        ;     sta VIC_CTRL2         4 cy → write at cycle 17 (restore)
-        ;
-        ;     waste to reach dodge point: need STA write at ~cycle 54.
-        ;       From cycle 23 (after restore STA) to LDA start for dodge.
-        ;       STA write at cycle 54 → LDA starts at 54-5 = 49.
-        ;       Waste: 49-23 = 26 cycles = 13 NOPs. ✓
-        ;
-        ;     lda #CTRL2_38COL      2 cy
-        ;     sta VIC_CTRL2         4 cy → write at cycle 54 (dodge)
-        ;
-        ;     After dodge STA: cycle 55. Next iter starts at cycle 58.
-        ;     Remaining waste: 58-55 = 3 cycles = 1 NOP(2)+... no.
-        ;       3 cycles: BIT zp = 3 cycles. ✓
-        ;
-        ;   Verify total: 17 + 2 + 4 + 26 + 2 + 4 + 3 = 58.
-        ;   Hmm, that's only 58 not 63. Let me recount.
-        ;
-        ;   Start of iter = cycle 58 of raster N.
-        ;   End of iter = cycle 58 of raster N+1 = 63 cycles later.
-        ;   Available: 63 cycles.
-        ;
-        ;   7 NOPs(14) + BIT zp(3) = 17 cycles → at cycle 58+17 = 75 → line wrap: 75-63 = cycle 12 of next line
-        ;   LDA(2) → cycle 14.  STA(4) → write at cycle 14+3=17. Restore at cycle 17. ✓
-        ;   13 NOPs(26) → cycle 17+6+26 = cycle 49. Hmm wait.
-        ;
-        ;   Let me just do it sequentially. Iter starts at cycle X of line N.
-        ;   Line N has 63-X cycles remaining. Then full line N+1.
-        ;   X = 58 for this layout.
-        ;   Remaining in line N: 63-58 = 5 cycles.
-        ;   Into line N+1: cycle 0.
-        ;   Goal: STA write at cycle 17 of line N+1.
-        ;   From iter start to STA write: 5 + 17 = 22 cycles.
-        ;   LDA+STA = 6 cycles, write at cycle 5 from LDA start.
-        ;   Waste before LDA: 22 - 5 = 17. (LDA starts at cy 17, write at cy 22.)
-        ;   Hmm, that puts write at cycle 22 from start = 5 + 17 = cy 22 of
-        ;   line N+1.  That's too late for the restore — 40-col display starts
-        ;   at cycle ~14. But actually the display start is when the border
-        ;   turns off, which we've prevented. The border is OFF already due to
-        ;   the dodge. The char display starts regardless at the normal column.
-        ;   CSEL just changes the comparison value; the display runs from the
-        ;   character generator regardless. With CSEL=0, the display area is
-        ;   8 pixels narrower (4 on each side). So we want CSEL=1 as early as
-        ;   possible to show 40 columns.
-        ;
-        ;   The left-border-OFF comparison (when border FF would be RESET):
-        ;     CSEL=0 → cycle 15;  CSEL=1 → cycle 12
-        ;   But the FF is already LOW (we dodged), so neither comparison
-        ;   matters for the border. However, CSEL affects the display width.
-        ;   To get 40-col display we just need CSEL=1 before the first
-        ;   character pixel is fetched (~cycle 14-15). So restore at cycle 12.
-        ;
-        ;   Updated: restore write at cycle 12 of next line.
-        ;   From iter start: 5 + 12 = 17 cycles to STA write.
-        ;   LDA write = cycle 5 from LDA start → LDA starts at 17-5 = 12.
-        ;   Waste before LDA: 12 cycles = 6 NOPs.
-        ;
-        ;   After restore STA: we're at cycle 12 + 1 = 13 of line N+1.
-        ;   (STA takes 4 cycles, started at cy 5+7=12... let me redo this.)
-        ;
-        ; OK - I'm going to simplify. Let me define the iteration as
-        ; starting right after the dodge STA completes (= cycle D+4 where
-        ; D is the cycle the STA started). I'll aim for:
-        ;   dodge STA writes at cycle 54 → STA starts at cycle 51
-        ;     (STA abs: 4 cycles, write on cycle 4 = STA_start+3)
-        ;     wait: STA_start(51) + 4 = done at cycle 55.
-        ;   Hmm, let me be very explicit about STA timing.
-        ;   STA $D016:
-        ;     cycle 1: read opcode
-        ;     cycle 2: read addr low
-        ;     cycle 3: read addr high
-        ;     cycle 4: write value to address  ← this is the "write"
-        ;   If STA starts at cycle 51: write at cycle 54. Done at end of cy 54.
-        ;   Next instruction begins at cycle 55.
-        ;
-        ; Iteration: from cycle 55 of line N to cycle 55 of line N+1 = 63 cy.
-        ;
-        ; Sub-segments:
-        ;   A) cycle 55 → end of line N: 63 - 55 = 8 cycles
-        ;   B) line N+1:
-        ;      - restore: we want LDA to start such that STA writes at cy ~15.
-        ;        STA starts at cy 12 (write at cy 15).
-        ;        LDA starts at cy 10.
-        ;        So from cy 0 to cy 10: 10 cycles of waste.
-        ;   Total waste before LDA: 8 + 10 = 18 cycles = 9 NOPs. ✓
-        ;   LDA #CTRL2_40COL: 2 cy (cy 10-11)
-        ;   STA VIC_CTRL2: 4 cy (cy 12-15, write at 15). Next at cy 16.
-        ;
-        ;   C) dodge: STA writes at cycle 54 → STA starts at cy 51.
-        ;      LDA starts at cy 49.
-        ;      From cy 16 to cy 49: 33 cycles.
-        ;      33/2 = 16 NOPs(32) + 1 leftover → 16 NOPs + ??? 
-        ;      33 = 16 NOPs(32) + BIT $EA(3) - too much. 
-        ;      33 = 15 NOPs(30) + BIT zp(3) = 33. ✓
-        ;
-        ;   LDA #CTRL2_38COL: 2 cy (cy 49-50)
-        ;   STA VIC_CTRL2: 4 cy (cy 51-54, write at 54). Next at cy 55.
-        ;
-        ;   Total: 18 + 2 + 4 + 33 + 2 + 4 = 63. ✓ !!!
-        ; ---------------------------------------------------------------
-
-; First we have the initial dodge already done above.
-; It wrote at ~cycle 54 of raster 139, completing at cycle 55.
-; Now do 21 unrolled iterations for rasters 140-160.
-; The LAST iteration (raster 160) should NOT dodge again (no sprite on 161),
-; so we do 20 full iterations + 1 final (restore only, no dodge).
-
-.macro BORDER_LINE
-        ; 9 NOPs = 18 cycles (fills end of prev line + start of this line)
-        .repeat 9
-        nop
-        .endrepeat
-        ; Restore 40-col mode — STA writes at ~cycle 15
-        lda #CTRL2_40COL            ; 2 cy
-        sta VIC_CTRL2               ; 4 cy (write at cycle 15)
-        ; 15 NOPs(30) + BIT zp(3) = 33 cycles
-        .repeat 15
-        nop
-        .endrepeat
-        bit $EA                     ; 3 cy (BIT zp, reads $00EA, harmless)
-        ; Dodge right border — STA writes at ~cycle 54
-        lda #CTRL2_38COL            ; 2 cy
-        sta VIC_CTRL2               ; 4 cy (write at cycle 54)
-.endmacro
-
-        ; 20 full iterations (rasters 140-159: restore + dodge)
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-        BORDER_LINE
-
-        ; 21st iteration (raster 160): restore only, no dodge
-        .repeat 9
-        nop
-        .endrepeat
-        lda #CTRL2_40COL
-        sta VIC_CTRL2               ; restore 40-col on last sprite line
-
-        ; Done — advance to state 1 (zone off at raster 175)
-        lda #RASTER_ZONE_OFF
-        sta VIC_RASTER
-        lda #1
-        sta irq_state
-
-        jmp $EA81                   ; quick RTI — no KERNAL handler;
-                                    ; CSEL loop ends at ~raster 160, and
-                                    ; $EA31 keyboard scan (~1000 cy with key
-                                    ; pressed) would overshoot raster 175
-                                    ; (State 1 zone-off), growing the gray zone
 
 
 ; ---- Coarse scroll ----------------------------------------------------------
@@ -1189,45 +918,7 @@ scroll_screen_down:
         sta text_hi
 @no_wrap_down:
 
-        ; Copy screen rows DOWN: row 23→24, 22→23, ..., 0→1
-        ; Must iterate high-to-low to avoid overwriting source data.
-        ; Uses dex-before-body + bne to handle full 0-255 range
-        ; (bpl fails for X > 127 since bit 7 is set).
-
-        ; Page 3: 192 bytes (offsets 768-959 → 808-999)
-        ldx #((ROWS-1)*SCREEN_COLS - 768)   ; 192
-@d3:    dex
-        lda SCREEN+768, x
-        sta SCREEN+768+SCREEN_COLS, x
-        txa                         ; set Z flag from X, not from lda
-        bne @d3
-
-        ; Page 2: 256 bytes (offsets 512-767 → 552-807)
-        ldx #0
-@d2:    dex
-        lda SCREEN+512, x
-        sta SCREEN+512+SCREEN_COLS, x
-        txa
-        bne @d2
-
-        ; Page 1: 256 bytes (offsets 256-511 → 296-551)
-        ldx #0
-@d1:    dex
-        lda SCREEN+256, x
-        sta SCREEN+256+SCREEN_COLS, x
-        txa
-        bne @d1
-
-        ; Page 0: 256 bytes (offsets 0-255 → 40-295)
-        ldx #0
-@d0:    dex
-        lda SCREEN, x
-        sta SCREEN+SCREEN_COLS, x
-        txa
-        bne @d0
-
-        ; Fill top row (row 0) with text from text_ptr - 25*COLS
-        ; Compute source address: text_ptr - 1000
+        ; Compute fill source address for row 0: text_ptr - 1000
         sec
         lda text_lo
         sbc #<1000
@@ -1245,7 +936,6 @@ scroll_screen_down:
         cmp #<text_data
         bcs @src_ok
 @src_wrap:
-        ; source += (text_data_end - text_data)
         clc
         lda zp_src
         adc #<(text_data_end - text_data)
@@ -1254,6 +944,32 @@ scroll_screen_down:
         adc #>(text_data_end - text_data)
         sta zp_src+1
 @src_ok:
+
+        ; Copy screen rows DOWN: row 23→24, 22→23, ..., 0→1
+        ; Pages copied 0→1→2→3 so top rows update before the beam.
+        ; Each page's +40 shift overwrites the first 40 bytes of the next
+        ; page's source, so those bytes are saved upfront.
+
+        ; Save 3 inter-page overlap regions (40 bytes each)
+        ldx #39
+@save:  lda SCREEN+256, x
+        sta save_buf_a, x
+        lda SCREEN+512, x
+        sta save_buf_b, x
+        lda SCREEN+768, x
+        sta save_buf_c, x
+        dex
+        bpl @save
+
+        ; Page 0: 256 bytes (offsets 0-255 → 40-295)
+        ldx #0
+@d0:    dex
+        lda SCREEN, x
+        sta SCREEN+SCREEN_COLS, x
+        txa
+        bne @d0
+
+        ; Fill row 0 immediately after page 0 (before beam reaches raster 51)
         ldy #0
 @fill_top:
         lda (zp_src), y
@@ -1270,6 +986,51 @@ scroll_screen_down:
         iny
         cpy #COLS
         bne @clr_top
+
+        ; Page 1: 256 bytes (offsets 256-511 → 296-551)
+        ; Upper 216 bytes from screen (uncorrupted), lower 40 from save_buf_a
+        ldx #0
+@d1u:   dex
+        lda SCREEN+256, x
+        sta SCREEN+256+SCREEN_COLS, x
+        cpx #40
+        bne @d1u
+        ldx #40
+@d1l:   dex
+        lda save_buf_a, x
+        sta SCREEN+256+SCREEN_COLS, x
+        txa
+        bne @d1l
+
+        ; Page 2: 256 bytes (offsets 512-767 → 552-807)
+        ; Upper 216 bytes from screen (uncorrupted), lower 40 from save_buf_b
+        ldx #0
+@d2u:   dex
+        lda SCREEN+512, x
+        sta SCREEN+512+SCREEN_COLS, x
+        cpx #40
+        bne @d2u
+        ldx #40
+@d2l:   dex
+        lda save_buf_b, x
+        sta SCREEN+512+SCREEN_COLS, x
+        txa
+        bne @d2l
+
+        ; Page 3: 192 bytes (offsets 768-959 → 808-999)
+        ; Upper 152 bytes from screen, lower 40 from save_buf_c
+        ldx #((ROWS-1)*SCREEN_COLS - 768)   ; 192
+@d3u:   dex
+        lda SCREEN+768, x
+        sta SCREEN+768+SCREEN_COLS, x
+        cpx #40
+        bne @d3u
+        ldx #40
+@d3l:   dex
+        lda save_buf_c, x
+        sta SCREEN+768+SCREEN_COLS, x
+        txa
+        bne @d3l
 
         rts
 
@@ -1454,10 +1215,6 @@ switch_to_config:
         lda #$06                    ; blue
         sta VIC_BG
 
-        ; Hide sprites during config
-        lda #$00
-        sta VIC_SPR_EN
-
         cli
 
         ; Save text pointer — BASIC ROM float routines (called by
@@ -1512,7 +1269,6 @@ switch_to_config:
         ; Reset IRQ chain state
         lda #0
         sta irq_state
-        sta csel_pass
 
         lda #RASTER_ZONE_ON
         sta VIC_RASTER
@@ -1525,20 +1281,11 @@ switch_to_config:
         and #$7F                    ; clear raster bit 8
         sta VIC_CTRL1
 
-        ; Restore 40-col mode (steady-state value — CSEL trick leaves CTRL2
-        ; at $08 after the last sprite line; 38-col only during dodge rasters)
-        lda #CTRL2_40COL
-        sta VIC_CTRL2
-
         ; Restore IRQ vector
         lda #<irq_handler
         sta $0314
         lda #>irq_handler
         sta $0315
-
-        ; Re-enable sprites
-        lda #$03
-        sta VIC_SPR_EN
 
         cli
         rts
@@ -1642,6 +1389,15 @@ velocity_hi:    .byte 0,0,0,0,0,0,0,0,0,0
 ; ---------------------------------------------------------------------------
 cfg_base_speed: .byte $7E,$19,$99,$99,$9A       ; 0.15 (default)
 cfg_accel_curv: .byte $81,$8C,$CC,$CC,$CD       ; 1.10 (default)
+
+; ---------------------------------------------------------------------------
+;  Save buffers for scroll_screen_down inter-page overlaps (3×40 bytes)
+;  When copying pages 0→1→2→3, each page's +40 shift overwrites the first
+;  40 bytes of the next page's source.  These buffers preserve those bytes.
+; ---------------------------------------------------------------------------
+save_buf_a: .res 40                     ; original SCREEN+256..295
+save_buf_b: .res 40                     ; original SCREEN+512..551
+save_buf_c: .res 40                     ; original SCREEN+768..807
 
 ; =============================================================================
 ;  Text data — Lorem Ipsum in C64 screen codes
