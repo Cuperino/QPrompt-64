@@ -84,7 +84,13 @@ current_step:   .res 1              ; current velocity step (0-9)
 direction:      .res 1              ; 1=forward (up), $FF=reverse (down)
 scroll_accum:   .res 1              ; fractional accumulator (8.8 low byte)
 do_coarse_down: .res 1              ; pending reverse coarse scroll count
-enter_config:   .res 1              ; flag: 1 = F1 pressed, enter config
+enter_config:   .res 1              ; flag: 0=none, 1=config, 2=editor
+cursor_x:       .res 1              ; editor cursor column 0-39
+cursor_y:       .res 1              ; editor cursor row 0-23
+current_page:   .res 1              ; 0-based page number
+total_pages:    .res 1              ; number of pages (1-based, max 10)
+came_from:      .res 1              ; 0=initial, 1=editor, 2=scroll
+first_run:      .res 1              ; 1=first RETURN on config goes to editor
 
 ; ---------------------------------------------------------------------------
 ;  PRG load address (consumed by LOAD, not part of memory image)
@@ -114,7 +120,37 @@ enter_config:   .res 1              ; flag: 1 = F1 pressed, enter config
 start:
         ; --- Config screen (runs with KERNAL IRQs still active) ---
         jsr config_screen_init
+        jsr init_document
         jsr build_velocity_table
+
+        ; First config screen — returns destination in A
+        jsr config_screen
+
+; --- Top-level dispatch: A = 0 (scroll) or 1 (editor) ---
+main_dispatch:
+        cmp #1
+        beq @md_editor
+        jmp enter_scroll_mode
+
+@md_editor:
+        lda #0
+        sta VIC_BORDER
+        sta VIC_BG
+        jsr enter_editor
+        ; Editor returned (F1 pressed) — came_from = 1
+        lda #$0E
+        sta VIC_BORDER
+        lda #$06
+        sta VIC_BG
+        jsr build_velocity_table
+        jsr config_screen
+        jmp main_dispatch
+
+; --- Enter scroll mode and run scroll loop ---
+enter_scroll_mode:
+        lda #2
+        sta came_from               ; mark that we're in scroll mode
+        jsr prepare_scroll_text
 
         sei
 
@@ -139,20 +175,15 @@ start:
         sta do_coarse_down
         sta enter_config
 
-        lda #<text_data
-        sta text_lo
-        lda #>text_data
-        sta text_hi
-
         ; 40-col mode
         lda #$08                    ; CSEL=1, XSCROLL=0
         sta VIC_CTRL2
 
         ; --- Set up sprites ---
-        ; Sprite data pointers: sprite 0 at $2000/64=$80, sprite 1 at $2040/64=$81
-        lda #$80
+        ; Sprite data pointers: sprite 0 at $3000/64=$C0, sprite 1 at $3040/64=$C1
+        lda #$C0
         sta SPR_PTR                 ; Sprite 0 = right-pointing triangle
-        lda #$81
+        lda #$C1
         sta SPR_PTR+1               ; Sprite 1 = left-pointing triangle
 
         ; Sprite positions — vertically centered
@@ -183,6 +214,9 @@ start:
         lda #$01
         sta $CC                     ; $CC != 0 → cursor blink disabled
 
+        ; Fill screen with text data
+        jsr refill_screen
+
         ; ---- Install raster IRQ chain ----
         lda #$7F
         sta CIA1_ICR                ; disable CIA timer IRQs
@@ -212,7 +246,7 @@ start:
 ; Main idle loop — all instructions ≤3 cycles, bounding IRQ jitter to ≤2 cy.
 @forever:
         lda enter_config            ; 3 cy
-        bne @go_config              ; 2 cy (not taken)
+        bne @exit_scroll            ; 2 cy (not taken)
         lda do_coarse               ; 3 cy
         bne @do_up                  ; 2 cy (not taken)
         lda do_coarse_down          ; 3 cy
@@ -226,11 +260,39 @@ start:
         dec do_coarse_down
         jsr scroll_screen_down
         jmp @forever
-@go_config:
+@exit_scroll:
+        ; enter_config: 1=F1 (config), 2=F3 (editor)
+        lda enter_config
+        pha
         lda #0
         sta enter_config
-        jsr switch_to_config
-        jmp @forever
+        jsr disable_raster_restore_kernal
+        pla
+        cmp #2
+        beq @scroll_to_editor
+        ; --- F1: go to config, then dispatch ---
+        lda #$0E
+        sta VIC_BORDER
+        lda #$06
+        sta VIC_BG
+        jsr build_velocity_table
+        jsr config_screen
+        jmp main_dispatch
+
+@scroll_to_editor:
+        ; --- F3: go directly to editor ---
+        lda #0
+        sta VIC_BORDER
+        sta VIC_BG
+        jsr enter_editor
+        ; Editor returned (F1) — go to config
+        lda #$0E
+        sta VIC_BORDER
+        lda #$06
+        sta VIC_BG
+        jsr build_velocity_table
+        jsr config_screen
+        jmp main_dispatch
 
 
 ; ---- Clear screen -----------------------------------------------------------
@@ -324,7 +386,12 @@ config_screen_init:
         sta cfg_accel_curv, x
         dex
         bpl @cp_ac
-        ; Fall through to config_screen
+        ; Set first_run and came_from
+        lda #1
+        sta first_run
+        lda #0
+        sta came_from
+        rts
 
 config_screen:
         ; Flush KERNAL keyboard buffer to prevent queued keys from
@@ -341,14 +408,36 @@ config_screen:
         cmp #$8D                    ; SHIFT+RETURN
         bne @not_return
 @is_return:
-        jmp @cfg_done
+        ; RETURN: if first_run → go to editor; else check came_from
+        lda first_run
+        beq @ret_not_first
+        lda #0
+        sta first_run
+        lda #1                      ; destination = editor
+        rts
+@ret_not_first:
+        lda came_from
+        cmp #1                      ; came from editor?
+        beq @ret_to_editor
+        lda #0                      ; destination = scroll
+        rts
+@ret_to_editor:
+        lda #1                      ; destination = editor
+        rts
 @not_return:
         cmp #PETSCII_F5
         beq @is_f5
         cmp #PETSCII_F5+4           ; SHIFT+F5 = F6 = $8B
         bne @not_f5
-@is_f5: jmp @cfg_done
+@is_f5: lda #0                      ; destination = scroll
+        sta first_run               ; clear first_run
+        rts
 @not_f5:
+        cmp #$86                    ; F3 PETSCII
+        bne @not_f3
+        lda #1                      ; destination = editor
+        rts
+@not_f3:
         cmp #PETSCII_UP
         beq @inc_speed
         cmp #PETSCII_DOWN
@@ -483,9 +572,6 @@ config_screen:
         jsr @draw_config
         jmp @cfg_loop
 
-@cfg_done:
-        rts
-
 ; --- Draw config screen ---
 @draw_config:
         ; Clear screen
@@ -554,6 +640,13 @@ config_screen:
         inx
         bne @in3
 @in3d:
+        ldx #0
+@in4:   lda @str_instr4, x
+        beq @in4d
+        sta SCREEN + 11*40 + 2, x
+        inx
+        bne @in4
+@in4d:
 
         ; Set all color RAM to white
         lda #WHITE
@@ -608,6 +701,8 @@ config_screen:
         .byte sc_L,sc_E,sc_F,sc_T,$2F,sc_R,sc_I,sc_G,sc_H,sc_T,__,$3D,__,sc_C,sc_U,sc_R,sc_V,sc_A,sc_T,sc_U,sc_R,sc_E,0
 @str_instr3:
         .byte sc_R,sc_E,sc_T,sc_U,sc_R,sc_N,$2F,sc_F,$35,__,$3D,__,sc_S,sc_T,sc_A,sc_R,sc_T,0
+@str_instr4:
+        .byte sc_F,$33,__,$3D,__,sc_E,sc_D,sc_I,sc_T,sc_O,sc_R,0
 
 
 ; ---- Display float as "N.NN" -----------------------------------------------
@@ -914,16 +1009,16 @@ scroll_screen_up:
 
         ; Wrap check
         lda text_hi
-        cmp #>text_data_end
+        cmp scroll_end_hi
         bcc @no_wrap
         bne @wrap
         lda text_lo
-        cmp #<text_data_end
+        cmp scroll_end_lo
         bcc @no_wrap
 @wrap:
-        lda #<text_data
+        lda scroll_start_lo
         sta text_lo
-        lda #>text_data
+        lda scroll_start_hi
         sta text_hi
 @no_wrap:
         rts
@@ -943,21 +1038,21 @@ scroll_screen_down:
         sbc #0
         sta text_hi
 
-        ; Wrap check: if text_ptr < text_data, wrap to end
+        ; Wrap check: if text_ptr < scroll_start, wrap to end
         lda text_hi
-        cmp #>text_data
+        cmp scroll_start_hi
         bcc @wrap_down              ; hi byte below → wrap
         bne @no_wrap_down           ; hi byte above → ok
         lda text_lo
-        cmp #<text_data
+        cmp scroll_start_lo
         bcs @no_wrap_down           ; lo byte >= → ok
 @wrap_down:
-        ; Wrap to text_data_end - COLS
+        ; Wrap to scroll_end - COLS
         sec
-        lda #<text_data_end
+        lda scroll_end_lo
         sbc #COLS
         sta text_lo
-        lda #>text_data_end
+        lda scroll_end_hi
         sbc #0
         sta text_hi
 @no_wrap_down:
@@ -971,21 +1066,29 @@ scroll_screen_down:
         sbc #>1000
         sta zp_src+1
 
-        ; Handle wrap: if source < text_data, add text length
+        ; Handle wrap: if source < scroll_start, add text length
         lda zp_src+1
-        cmp #>text_data
+        cmp scroll_start_hi
         bcc @src_wrap
         bne @src_ok
         lda zp_src
-        cmp #<text_data
+        cmp scroll_start_lo
         bcs @src_ok
 @src_wrap:
+        ; Add scroll_end - scroll_start to source
+        sec
+        lda scroll_end_lo
+        sbc scroll_start_lo
+        sta zp_dst              ; temp: text length lo
+        lda scroll_end_hi
+        sbc scroll_start_hi
+        sta zp_dst+1            ; temp: text length hi
         clc
         lda zp_src
-        adc #<(text_data_end - text_data)
+        adc zp_dst
         sta zp_src
         lda zp_src+1
-        adc #>(text_data_end - text_data)
+        adc zp_dst+1
         sta zp_src+1
 @src_ok:
 
@@ -1167,6 +1270,13 @@ read_keyboard:
         sta enter_config
         rts
 @not_f1:
+        ; Check for F3 (matrix code $05) → enter editor
+        cmp #$05
+        bne @not_f3
+        lda #2
+        sta enter_config
+        rts
+@not_f3:
         ; Compare against number key matrix codes
         cmp #$38                    ; key "1" → step 0 (still)
         bne @not1
@@ -1221,12 +1331,8 @@ read_keyboard:
         rts
 
 
-; ---- Switch to config screen and back --------------------------------------
-; Called from main loop when F1 is pressed.
-; Disables raster IRQ, restores KERNAL, runs config screen, rebuilds velocity
-; table, restores raster IRQ, and refills the scroll display.
-; ---------------------------------------------------------------------------
-switch_to_config:
+; ---- Disable raster IRQ and restore KERNAL ----------------------------------
+disable_raster_restore_kernal:
         sei
 
         ; Disable VIC raster IRQ
@@ -1247,91 +1353,880 @@ switch_to_config:
         lda #$EA
         sta $0315
 
-        ; Normal 25-row display for config screen
+        ; Normal 25-row display
         lda #$1B
         sta VIC_CTRL1
         lda #$08                    ; CSEL=1 (40-col mode)
         sta VIC_CTRL2
 
-        ; Restore BASIC default colors
-        lda #$0E                    ; light blue
-        sta VIC_BORDER
-        lda #$06                    ; blue
-        sta VIC_BG
-
-        cli
-
-        ; Save text pointer — BASIC ROM float routines (called by
-        ; config_screen and build_velocity_table) use ZP $07/$08
-        ; as scratch, which overlaps text_lo/text_hi.
-        lda text_lo
-        pha
-        lda text_hi
-        pha
-
-        ; --- Run config screen (no default reset) ---
-        jsr config_screen
-        jsr build_velocity_table
-
-        ; Restore text pointer
-        pla
-        sta text_hi
-        pla
-        sta text_lo
-
-        sei
-
-        ; Restore black border/background
+        ; Disable sprites
         lda #$00
+        sta VIC_SPR_EN
+
+        cli
+        rts
+
+
+; ===========================================================================
+;  EDITOR SCREEN
+; ===========================================================================
+
+; ---- Enter editor -----------------------------------------------------------
+; Full-screen text editor with page navigation, cursor movement, and typing.
+; Returns when F1 is pressed (came_from set to 1 = editor).
+; ---------------------------------------------------------------------------
+enter_editor:
+        ; Set black border/background
+        lda #0
         sta VIC_BORDER
         sta VIC_BG
 
-        ; Clear screen and refill with text
-        jsr clear_screen
-        jsr refill_screen
+        ; Clear screen
+        lda #$20
+        ldx #0
+@ee_cls:
+        sta SCREEN, x
+        sta SCREEN+256, x
+        sta SCREEN+512, x
+        sta SCREEN+744, x
+        inx
+        bne @ee_cls
 
-        ; Reset scroll state
-        lda #7
-        sta fine_scroll
+        ; Set color RAM rows 0-23 = WHITE
+        lda #WHITE
+        ldx #0
+@ee_cr0:
+        sta COLRAM, x
+        sta COLRAM+256, x
+        sta COLRAM+512, x
+        inx
+        bne @ee_cr0
+        ; Remaining row 24 area in page 3 = LIGHT_BLUE
+        ldx #0
+@ee_cr3:
+        sta COLRAM+768, x
+        inx
+        cpx #192                    ; rows 19-23 (white)
+        bne @ee_cr3
+        lda #LIGHT_BLUE
+        ldx #192
+@ee_cr4:
+        sta COLRAM+768, x          ; row 24 = light blue
+        inx
+        bne @ee_cr4
+
+        ; Load current page
+        jsr load_editor_page
+
+        ; Draw status bar
+        jsr draw_status_bar
+
+        ; Draw cursor (reverse char at position)
+        jsr draw_cursor
+
+        ; Flush keyboard buffer
         lda #0
-        sta scroll_accum
-        sta do_coarse
-        sta do_coarse_down
+        sta $C6
 
-        ; Disable cursor blink again (config screen re-enabled KERNAL)
-        lda #$01
-        sta $CC
+; ---- Editor main loop -------------------------------------------------------
+editor_loop:
+        ; Check Ctrl key via $028D (bit 2 = CTRL)
+        lda $028D
+        and #$04
+        beq @no_ctrl
+        lda $CB                     ; matrix code
+        cmp #$0D                    ; S key
+        bne @not_ctrl_s
+        jmp do_ctrl_s
+@not_ctrl_s:
+        cmp #$27                    ; N key
+        bne @not_ctrl_n
+        jmp do_ctrl_n
+@not_ctrl_n:
+        cmp #$26                    ; O key
+        bne @no_ctrl
+        jmp do_ctrl_o
+@no_ctrl:
+        ; GETIN for normal keys
+        jsr KERNAL_GETIN
+        beq editor_loop
 
-        ; Re-disable CIA1, enable VIC raster
-        lda #$7F
-        sta CIA1_ICR
-        lda CIA1_ICR                ; acknowledge pending
+        ; Dispatch
+        cmp #$88                    ; F7 → next page
+        bne @not_f7
+        jmp ed_next_page
+@not_f7:
+        cmp #$8C                    ; F8 → prev page
+        bne @not_f8
+        jmp ed_prev_page
+@not_f8:
+        cmp #$85                    ; F1 → exit to config
+        bne @not_f1_ed
+        jmp ed_exit
+@not_f1_ed:
+        cmp #$0D                    ; RETURN
+        bne @not_return
+        jmp ed_return_key
+@not_return:
+        cmp #$14                    ; DEL (backspace)
+        bne @not_del
+        jmp ed_del_key
+@not_del:
+        cmp #$91                    ; Cursor Up
+        bne @not_up
+        jmp ed_cursor_up
+@not_up:
+        cmp #$11                    ; Cursor Down
+        bne @not_down
+        jmp ed_cursor_down
+@not_down:
+        cmp #$9D                    ; Cursor Left
+        bne @not_left
+        jmp ed_cursor_left
+@not_left:
+        cmp #$1D                    ; Cursor Right
+        bne @not_right_ed
+        jmp ed_cursor_right
+@not_right_ed:
+        ; Try printable character
+        jsr petscii_to_screencode_editor
+        bcs editor_loop             ; carry set = not printable
+        jmp ed_printable
 
-        lda #$01
-        sta VIC_IRQ_MASK
-
-        ; Reset IRQ chain state
+; ---- Printable character ----------------------------------------------------
+ed_printable:
+        ; A = screen code to place
+        pha
+        jsr undraw_cursor           ; restore original char
+        pla
+        ; Write at cursor position
+        jsr ed_calc_cursor_addr     ; zp_dst = screen addr of cursor
+        ldy #0
+        sta (zp_dst), y
+        ; Advance cursor right
+        inc cursor_x
+        lda cursor_x
+        cmp #40
+        bcc @ep_done
         lda #0
-        sta irq_state
+        sta cursor_x
+        inc cursor_y
+        lda cursor_y
+        cmp #24
+        bcc @ep_done
+        lda #23
+        sta cursor_y
+@ep_done:
+        jsr draw_cursor
+        jmp editor_loop
 
-        lda #(RASTER_ZONE_ON - 2)
-        sta VIC_RASTER
+; ---- RETURN key -------------------------------------------------------------
+ed_return_key:
+        jsr undraw_cursor
+        lda #0
+        sta cursor_x
+        inc cursor_y
+        lda cursor_y
+        cmp #24
+        bcc @erk_done
+        lda #23
+        sta cursor_y
+@erk_done:
+        jsr draw_cursor
+        jmp editor_loop
 
-        ; Set VIC_CTRL1 for scrolling: DEN=1, RSEL=0, YSCROLL=fine_scroll
-        lda fine_scroll
-        ora #%00010000
-        sta VIC_CTRL1
-        lda VIC_CTRL1
-        and #$7F                    ; clear raster bit 8
-        sta VIC_CTRL1
+; ---- DEL (backspace) --------------------------------------------------------
+ed_del_key:
+        ; If at 0,0 do nothing
+        lda cursor_x
+        ora cursor_y
+        beq @edk_done_jmp
+        jsr undraw_cursor
+        ; Move cursor left
+        lda cursor_x
+        bne @edk_left
+        ; At col 0 → go to col 39, prev row
+        lda #39
+        sta cursor_x
+        dec cursor_y
+        jmp @edk_clear
+@edk_left:
+        dec cursor_x
+@edk_clear:
+        ; Write space at new cursor position
+        jsr ed_calc_cursor_addr
+        lda #$20
+        ldy #0
+        sta (zp_dst), y
+        jsr draw_cursor
+@edk_done_jmp:
+        jmp editor_loop
 
-        ; Restore IRQ vector
-        lda #<irq_handler
-        sta $0314
-        lda #>irq_handler
-        sta $0315
+; ---- Cursor movement --------------------------------------------------------
+ed_cursor_up:
+        jsr undraw_cursor
+        lda cursor_y
+        beq @ecu_done
+        dec cursor_y
+@ecu_done:
+        jsr draw_cursor
+        jmp editor_loop
 
-        cli
+ed_cursor_down:
+        jsr undraw_cursor
+        lda cursor_y
+        cmp #23
+        bcs @ecd_done
+        inc cursor_y
+@ecd_done:
+        jsr draw_cursor
+        jmp editor_loop
+
+ed_cursor_left:
+        jsr undraw_cursor
+        lda cursor_x
+        beq @ecl_done
+        dec cursor_x
+@ecl_done:
+        jsr draw_cursor
+        jmp editor_loop
+
+ed_cursor_right:
+        jsr undraw_cursor
+        lda cursor_x
+        cmp #39
+        bcs @ecr_done
+        inc cursor_x
+@ecr_done:
+        jsr draw_cursor
+        jmp editor_loop
+
+; ---- F7: Next page ----------------------------------------------------------
+ed_next_page:
+        jsr save_editor_page
+        lda current_page
+        clc
+        adc #1
+        cmp total_pages
+        bcc @enp_existing           ; current_page+1 < total_pages → ok
+        ; At last page — can we add a new one?
+        lda total_pages
+        cmp #10
+        bcs @enp_no_more            ; already 10 pages
+        ; Add new blank page
+        inc total_pages
+        ; Fill new page with spaces
+        ldx total_pages
+        dex                         ; index of new page (total_pages-1)
+        lda page_addr_lo, x
+        sta zp_dst
+        lda page_addr_hi, x
+        sta zp_dst+1
+        jsr fill_page_spaces
+@enp_existing:
+        inc current_page
+        jsr load_editor_page
+        jsr draw_status_bar
+        lda #0
+        sta cursor_x
+        sta cursor_y
+        jsr draw_cursor
+@enp_no_more:
+        jmp editor_loop
+
+; ---- F8: Prev page ----------------------------------------------------------
+ed_prev_page:
+        lda current_page
+        beq @epp_done               ; already at page 0
+        jsr save_editor_page
+        dec current_page
+        jsr load_editor_page
+        jsr draw_status_bar
+        lda #0
+        sta cursor_x
+        sta cursor_y
+        jsr draw_cursor
+@epp_done:
+        jmp editor_loop
+
+; ---- F1: Exit to config -----------------------------------------------------
+ed_exit:
+        jsr undraw_cursor
+        jsr save_editor_page
+        lda #1
+        sta came_from               ; came from editor
+        rts
+
+; ---- Calculate cursor screen address ----------------------------------------
+; Sets zp_dst to SCREEN + cursor_y * 40 + cursor_x
+; ---------------------------------------------------------------------------
+ed_calc_cursor_addr:
+        ; Multiply cursor_y by 40: y*40 = y*8 + y*32
+        lda #0
+        sta zp_dst+1
+        lda cursor_y
+        asl                         ; y*2
+        asl                         ; y*4
+        asl                         ; y*8
+        sta zp_dst                  ; save y*8
+        asl                         ; y*16 (low byte)
+        rol zp_dst+1               ; carry into high byte
+        asl                         ; y*32 (low byte)
+        rol zp_dst+1
+        clc
+        adc zp_dst                  ; y*32 + y*8 = y*40 (low)
+        sta zp_dst
+        lda zp_dst+1
+        adc #0                      ; carry from low-byte add
+        sta zp_dst+1
+        ; Add cursor_x
+        clc
+        lda zp_dst
+        adc cursor_x
+        sta zp_dst
+        lda zp_dst+1
+        adc #0
+        sta zp_dst+1
+        ; Add SCREEN base
+        clc
+        lda zp_dst
+        adc #<SCREEN
+        sta zp_dst
+        lda zp_dst+1
+        adc #>SCREEN
+        sta zp_dst+1
+        rts
+
+; ---- Draw cursor (reverse char at position) ---------------------------------
+draw_cursor:
+        jsr ed_calc_cursor_addr
+        ldy #0
+        lda (zp_dst), y
+        ora #$80                    ; set bit 7 (reverse)
+        sta (zp_dst), y
+        rts
+
+; ---- Undraw cursor (un-reverse char at position) ----------------------------
+undraw_cursor:
+        jsr ed_calc_cursor_addr
+        ldy #0
+        lda (zp_dst), y
+        and #$7F                    ; clear bit 7 (un-reverse)
+        sta (zp_dst), y
+        rts
+
+; ---- PETSCII → screen code conversion (editor) -----------------------------
+; Input: A = PETSCII character
+; Output: A = screen code, carry clear if printable; carry set if rejected
+; ---------------------------------------------------------------------------
+petscii_to_screencode_editor:
+        cmp #$20
+        bcc @pts_reject
+        cmp #$40
+        bcc @pts_direct             ; $20-$3F → same screen code
+        cmp #$60
+        bcc @pts_alpha              ; $40-$5F → AND #$3F
+@pts_reject:
+        sec
+        rts
+@pts_direct:
+        clc
+        rts
+@pts_alpha:
+        and #$3F
+        clc
+        rts
+
+; ---- Save editor page: SCREEN rows 0-23 → doc_buffer -----------------------
+save_editor_page:
+        ; Calculate doc_buffer address for current_page
+        ldx current_page
+        lda page_addr_lo, x
+        sta zp_dst
+        lda page_addr_hi, x
+        sta zp_dst+1
+
+        ; Source = SCREEN
+        lda #<SCREEN
+        sta zp_src
+        lda #>SCREEN
+        sta zp_src+1
+
+        ; Copy 960 bytes = 3 full 256-byte pages + 192 bytes
+        ldx #3
+@sep_full:
+        ldy #0
+@sep_byte:
+        lda (zp_src), y
+        sta (zp_dst), y
+        iny
+        bne @sep_byte
+        inc zp_src+1
+        inc zp_dst+1
+        dex
+        bne @sep_full
+        ; Copy remaining 192 bytes
+        ldy #0
+@sep_tail:
+        lda (zp_src), y
+        sta (zp_dst), y
+        iny
+        cpy #192
+        bne @sep_tail
+        rts
+
+; ---- Load editor page: doc_buffer → SCREEN rows 0-23 -----------------------
+load_editor_page:
+        ; Calculate doc_buffer address for current_page
+        ldx current_page
+        lda page_addr_lo, x
+        sta zp_src
+        lda page_addr_hi, x
+        sta zp_src+1
+
+        ; Dest = SCREEN
+        lda #<SCREEN
+        sta zp_dst
+        lda #>SCREEN
+        sta zp_dst+1
+
+        ; Copy 960 bytes = 3 full 256-byte pages + 192 bytes
+        ldx #3
+@lep_full:
+        ldy #0
+@lep_byte:
+        lda (zp_src), y
+        sta (zp_dst), y
+        iny
+        bne @lep_byte
+        inc zp_src+1
+        inc zp_dst+1
+        dex
+        bne @lep_full
+        ; Copy remaining 192 bytes
+        ldy #0
+@lep_tail:
+        lda (zp_src), y
+        sta (zp_dst), y
+        iny
+        cpy #192
+        bne @lep_tail
+        rts
+
+; ---- Fill a page (960 bytes) at zp_dst with spaces --------------------------
+fill_page_spaces:
+        lda #$20
+        ldx #3
+@fps_full:
+        ldy #0
+@fps_byte:
+        sta (zp_dst), y
+        iny
+        bne @fps_byte
+        inc zp_dst+1
+        dex
+        bne @fps_full
+        ldy #0
+@fps_tail:
+        sta (zp_dst), y
+        iny
+        cpy #192
+        bne @fps_tail
+        rts
+
+; ---- Draw status bar on row 24 ---------------------------------------------
+; Shows "PAGE X/Y" in reversed characters on a light blue background.
+; ---------------------------------------------------------------------------
+draw_status_bar:
+        ; Fill row 24 with reversed spaces ($A0)
+        lda #$A0
+        ldx #0
+@dsb_fill:
+        sta SCREEN + 24*40, x
+        inx
+        cpx #40
+        bne @dsb_fill
+
+        ; Write "PAGE " at col 1 (reversed screen codes: sc_X | $80)
+        lda #(sc_P | $80)
+        sta SCREEN + 24*40 + 1
+        lda #(sc_A | $80)
+        sta SCREEN + 24*40 + 2
+        lda #(sc_G | $80)
+        sta SCREEN + 24*40 + 3
+        lda #(sc_E | $80)
+        sta SCREEN + 24*40 + 4
+
+        ; Current page number (1-based)
+        lda current_page
+        clc
+        adc #1
+        ora #$30                    ; digit → screen code
+        ora #$80                    ; reversed
+        sta SCREEN + 24*40 + 6
+
+        ; "/"
+        lda #($2F | $80)
+        sta SCREEN + 24*40 + 7
+
+        ; Total pages
+        lda total_pages
+        ora #$30
+        ora #$80
+        sta SCREEN + 24*40 + 8
+        rts
+
+; ---- Dialog system ----------------------------------------------------------
+; Shows a message on row 24, waits for RETURN (confirm) or ← (cancel).
+; Input: zp_src = pointer to null-terminated screen code string
+; Output: carry clear = confirmed, carry set = cancelled
+; ---------------------------------------------------------------------------
+show_dialog:
+        ; Save row 24 content
+        ldx #39
+@sd_save:
+        lda SCREEN + 24*40, x
+        sta dialog_save, x
+        dex
+        bpl @sd_save
+
+        ; Fill row 24 with reversed spaces
+        lda #$A0
+        ldx #0
+@sd_fill:
+        sta SCREEN + 24*40, x
+        inx
+        cpx #40
+        bne @sd_fill
+
+        ; Display message (reversed)
+        ldy #0
+@sd_msg:
+        lda (zp_src), y
+        beq @sd_wait
+        ora #$80                    ; reverse
+        sta SCREEN + 24*40 + 1, y
+        iny
+        cpy #38
+        bne @sd_msg
+
+@sd_wait:
+        ; Flush keyboard
+        lda #0
+        sta $C6
+@sd_key:
+        jsr KERNAL_GETIN
+        beq @sd_key
+        cmp #$0D                    ; RETURN = confirm
+        beq @sd_confirm
+        cmp #$5F                    ; ← (back-arrow) = cancel
+        beq @sd_cancel
+        jmp @sd_key
+
+@sd_confirm:
+        ; Restore row 24
+        ldx #39
+@sd_rest1:
+        lda dialog_save, x
+        sta SCREEN + 24*40, x
+        dex
+        bpl @sd_rest1
+        clc                         ; confirmed
+        rts
+
+@sd_cancel:
+        ; Restore row 24
+        ldx #39
+@sd_rest2:
+        lda dialog_save, x
+        sta SCREEN + 24*40, x
+        dex
+        bpl @sd_rest2
+        sec                         ; cancelled
+        rts
+
+; ---- Ctrl+S: Save to disk --------------------------------------------------
+do_ctrl_s:
+        lda #<str_save_dialog
+        sta zp_src
+        lda #>str_save_dialog
+        sta zp_src+1
+        jsr show_dialog
+        bcs @dcs_done               ; cancelled
+        ; Save current page first
+        jsr undraw_cursor
+        jsr save_editor_page
+        ; Store total_pages in save_header
+        lda total_pages
+        sta save_header
+        ; KERNAL SAVE: set up logical file
+        lda #1                      ; logical file #
+        ldx #8                      ; device 8
+        ldy #1                      ; secondary address 1
+        jsr KERNAL_SETLFS
+        ; Set filename "@0:TELEPROMPTER"
+        lda #15                     ; filename length
+        ldx #<str_save_fname
+        ldy #>str_save_fname
+        jsr KERNAL_SETNAM
+        ; KERNAL SAVE: A = ZP addr of 2-byte start ptr, X/Y = end addr
+        ; Store start address in zp_src
+        lda #<save_header
+        sta zp_src
+        lda #>save_header
+        sta zp_src+1
+        ; Calculate end address: page_addr[total_pages]
+        ldx total_pages
+        lda page_addr_lo, x
+        sta zp_dst                  ; temp end lo
+        lda page_addr_hi, x
+        sta zp_dst+1                ; temp end hi
+        lda #zp_src                 ; A = ZP addr of start pointer
+        ldx zp_dst                  ; X = end lo
+        ldy zp_dst+1               ; Y = end hi
+        jsr KERNAL_SAVE
+        jsr draw_cursor
+@dcs_done:
+        jmp editor_loop
+
+; ---- Ctrl+N: New document ---------------------------------------------------
+do_ctrl_n:
+        lda #<str_new_dialog
+        sta zp_src
+        lda #>str_new_dialog
+        sta zp_src+1
+        jsr show_dialog
+        bcs @dcn_done               ; cancelled
+        jsr undraw_cursor
+        ; Fill entire doc_buffer with spaces (10 pages max = 9600 bytes)
+        ; Just fill total_pages worth
+        lda #<doc_buffer
+        sta zp_dst
+        lda #>doc_buffer
+        sta zp_dst+1
+        ; Fill 960 bytes (1 page)
+        jsr fill_page_spaces
+        lda #1
+        sta total_pages
+        lda #0
+        sta current_page
+        sta cursor_x
+        sta cursor_y
+        jsr load_editor_page
+        jsr draw_status_bar
+        jsr draw_cursor
+@dcn_done:
+        jmp editor_loop
+
+; ---- Ctrl+O: Open from disk ------------------------------------------------
+do_ctrl_o:
+        lda #<str_open_dialog
+        sta zp_src
+        lda #>str_open_dialog
+        sta zp_src+1
+        jsr show_dialog
+        bcs @dco_done               ; cancelled
+        jsr undraw_cursor
+        ; KERNAL LOAD
+        lda #1                      ; logical file #
+        ldx #8                      ; device 8
+        ldy #1                      ; secondary 1 = load to file address
+        jsr KERNAL_SETLFS
+        lda #12                     ; filename length "TELEPROMPTER"
+        ldx #<str_load_fname
+        ldy #>str_load_fname
+        jsr KERNAL_SETNAM
+        lda #0                      ; LOAD (not VERIFY)
+        ldx #<save_header           ; load address lo (when secondary=0)
+        ldy #>save_header           ; load address hi
+        jsr KERNAL_LOAD
+        bcs @dco_error              ; carry set = error
+        ; Read total_pages from save_header
+        lda save_header
+        sta total_pages
+        lda #0
+        sta current_page
+        sta cursor_x
+        sta cursor_y
+        jsr load_editor_page
+        jsr draw_status_bar
+        jsr draw_cursor
+        jmp editor_loop
+@dco_error:
+        ; Load failed — just restore display
+        jsr draw_status_bar
+        jsr draw_cursor
+@dco_done:
+        jmp editor_loop
+
+; ---- Editor string data (screen codes, null-terminated) ---------------------
+str_save_dialog:
+        .byte sc_R,sc_E,sc_A,sc_D,sc_Y,__,sc_D,sc_I,sc_S,sc_K,_d
+        .byte __,sc_R,sc_E,sc_T,sc_U,sc_R,sc_N,$2F,$1F,0
+str_new_dialog:
+        .byte sc_N,sc_E,sc_W,__,sc_D,sc_O,sc_C,sc_U,sc_M,sc_E,sc_N,sc_T,$3F
+        .byte __,sc_R,sc_E,sc_T,sc_U,sc_R,sc_N,$2F,$1F,0
+str_open_dialog:
+        .byte sc_R,sc_E,sc_A,sc_D,sc_Y,__,sc_D,sc_I,sc_S,sc_K,_d
+        .byte __,sc_R,sc_E,sc_T,sc_U,sc_R,sc_N,$2F,$1F,0
+
+; Filenames for KERNAL file I/O (PETSCII)
+str_save_fname:
+        .byte "@0:TELEPROMPTER"     ; 15 chars, save with replace
+str_load_fname:
+        .byte "TELEPROMPTER"        ; 12 chars
+
+
+; ---- Initialize document buffer from text_data --------------------------------
+; Copies the Lorem Ipsum text (38 lines = 1520 bytes) into doc_buffer,
+; pads remainder of first 2 pages (1920 bytes total) with spaces.
+; Sets total_pages=2, current_page=0, cursor_x/y=0.
+; ---------------------------------------------------------------------------
+init_document:
+        ; Source = text_data (38 lines of actual text, no trailing blanks)
+        lda #<text_data
+        sta zp_src
+        lda #>text_data
+        sta zp_src+1
+
+        ; Dest = doc_buffer
+        lda #<doc_buffer
+        sta zp_dst
+        lda #>doc_buffer
+        sta zp_dst+1
+
+        ; Copy 1520 bytes (38 lines × 40 bytes) = 5 × 256 + 240
+        ; Copy 5 full pages
+        ldx #5
+@id_page:
+        ldy #0
+@id_byte:
+        lda (zp_src), y
+        sta (zp_dst), y
+        iny
+        bne @id_byte
+        inc zp_src+1
+        inc zp_dst+1
+        dex
+        bne @id_page
+
+        ; Copy remaining 240 bytes ($F0)
+        ldy #0
+@id_tail:
+        lda (zp_src), y
+        sta (zp_dst), y
+        iny
+        cpy #240
+        bne @id_tail
+
+        ; Now pad the rest of 2 pages (1920 - 1520 = 400 bytes) with spaces
+        ; zp_dst+1 is pointing at page after the 5 full pages
+        ; Current offset within that page is 240 ($F0)
+        ; Fill 16 remaining bytes in this page
+        lda #$20
+@id_pad1:
+        sta (zp_dst), y
+        iny
+        bne @id_pad1
+        ; Fill next 144 bytes (400 - 256 = 144)... wait let me recalculate.
+        ; doc_buffer + 1520 = doc_buffer + $05F0
+        ; 2 pages = 1920 bytes = doc_buffer + $0780
+        ; Remaining = 1920 - 1520 = 400 = $190
+        ; After the 240-byte tail copy: dst is at doc_buffer + $0500 offset 240
+        ; remaining in this 256-byte page: 16 bytes → fills to doc_buffer+$0600
+        ; Then need $190 - 16 = $180 = 384 more bytes
+        ; = 1 full 256-byte page + 128 bytes
+        inc zp_dst+1
+        ldy #0
+@id_pad2:
+        sta (zp_dst), y
+        iny
+        bne @id_pad2
+        inc zp_dst+1
+        ldy #0
+@id_pad3:
+        sta (zp_dst), y
+        iny
+        cpy #128
+        bne @id_pad3
+
+        ; Set editor state
+        lda #2
+        sta total_pages
+        lda #0
+        sta current_page
+        sta cursor_x
+        sta cursor_y
+        rts
+
+
+; ---- Prepare scroll text from doc_buffer -----------------------------------
+; Sets scroll_start/scroll_end and text_lo/hi for the scroller.
+; Appends 1000 bytes (25 blank lines) as scroll_trail after document content.
+; ---------------------------------------------------------------------------
+prepare_scroll_text:
+        ; Save current editor page
+        jsr save_editor_page
+
+        ; scroll_start = doc_buffer
+        lda #<doc_buffer
+        sta scroll_start_lo
+        lda #>doc_buffer
+        sta scroll_start_hi
+
+        ; Calculate end of document content: doc_buffer + total_pages * 960
+        ; Use page_addr_lo/hi table: entry [total_pages] gives the address
+        ldx total_pages
+        lda page_addr_lo, x
+        sta zp_dst
+        lda page_addr_hi, x
+        sta zp_dst+1
+
+        ; Fill scroll_trail (1000 bytes of spaces after document content)
+        lda #$20
+        ldy #0
+@pst_fill1:
+        sta (zp_dst), y
+        iny
+        bne @pst_fill1
+        inc zp_dst+1
+        ldy #0
+@pst_fill2:
+        sta (zp_dst), y
+        iny
+        bne @pst_fill2
+        inc zp_dst+1
+        ldy #0
+@pst_fill3:
+        sta (zp_dst), y
+        iny
+        bne @pst_fill3
+        inc zp_dst+1
+        ; 768 done, 232 more
+        ldy #0
+@pst_fill4:
+        sta (zp_dst), y
+        iny
+        cpy #232
+        bne @pst_fill4
+
+        ; scroll_end = doc_buffer + total_pages*960 + 1000
+        ; = page_addr[total_pages] + 1000
+        ; 1000 = $03E8
+        ldx total_pages
+        clc
+        lda page_addr_lo, x
+        adc #<1000
+        sta scroll_end_lo
+        lda page_addr_hi, x
+        adc #>1000
+        sta scroll_end_hi
+
+        ; text_lo/hi = scroll_start (beginning of document)
+        lda scroll_start_lo
+        sta text_lo
+        lda scroll_start_hi
+        sta text_hi
         rts
 
 
@@ -1349,21 +2244,29 @@ refill_screen:
         sbc #>1000
         sta zp_src+1
 
-        ; Wrap if source < text_data
+        ; Wrap if source < scroll_start
         lda zp_src+1
-        cmp #>text_data
+        cmp scroll_start_hi
         bcc @rf_wrap
         bne @rf_no_wrap
         lda zp_src
-        cmp #<text_data
+        cmp scroll_start_lo
         bcs @rf_no_wrap
 @rf_wrap:
+        ; Add text length = scroll_end - scroll_start
+        sec
+        lda scroll_end_lo
+        sbc scroll_start_lo
+        pha                     ; text_len_lo
+        lda scroll_end_hi
+        sbc scroll_start_hi
+        tay                     ; text_len_hi
         clc
-        lda zp_src
-        adc #<(text_data_end - text_data)
+        pla
+        adc zp_src
         sta zp_src
-        lda zp_src+1
-        adc #>(text_data_end - text_data)
+        tya
+        adc zp_src+1
         sta zp_src+1
 @rf_no_wrap:
 
@@ -1392,18 +2295,18 @@ refill_screen:
         adc #0
         sta zp_src+1
 
-        ; Wrap source if >= text_data_end
+        ; Wrap source if >= scroll_end
         lda zp_src+1
-        cmp #>text_data_end
+        cmp scroll_end_hi
         bcc @rf_no_src_wrap
         bne @rf_src_wrap
         lda zp_src
-        cmp #<text_data_end
+        cmp scroll_end_lo
         bcc @rf_no_src_wrap
 @rf_src_wrap:
-        lda #<text_data
+        lda scroll_start_lo
         sta zp_src
-        lda #>text_data
+        lda scroll_start_hi
         sta zp_src+1
 @rf_no_src_wrap:
 
@@ -1442,6 +2345,33 @@ cfg_accel_curv: .byte $81,$8C,$CC,$CC,$CD       ; 1.10 (default)
 save_buf_a: .res 40                     ; original SCREEN+256..295
 save_buf_b: .res 40                     ; original SCREEN+512..551
 save_buf_c: .res 40                     ; original SCREEN+768..807
+
+; ---------------------------------------------------------------------------
+;  Variable scroll boundaries (set by prepare_scroll_text)
+; ---------------------------------------------------------------------------
+scroll_start_lo: .byte 0
+scroll_start_hi: .byte 0
+scroll_end_lo:   .byte 0
+scroll_end_hi:   .byte 0
+
+; ---------------------------------------------------------------------------
+;  Dialog row 24 save buffer (40 bytes)
+; ---------------------------------------------------------------------------
+dialog_save: .res 40
+
+; ---------------------------------------------------------------------------
+;  KERNAL file I/O addresses
+; ---------------------------------------------------------------------------
+KERNAL_SETLFS   = $FFBA
+KERNAL_SETNAM   = $FFBD
+KERNAL_OPEN     = $FFC0
+KERNAL_CLOSE    = $FFC3
+KERNAL_CHKIN    = $FFC6
+KERNAL_CHKOUT   = $FFC9
+KERNAL_CLRCHN   = $FFCC
+KERNAL_CHRIN    = $FFCF
+KERNAL_SAVE     = $FFD8
+KERNAL_LOAD     = $FFD5
 
 ; =============================================================================
 ;  Text data — Lorem Ipsum in C64 screen codes
@@ -1491,6 +2421,34 @@ fp_1_0:         .byte $81,$00,$00,$00,$00       ; 1.0
 fp_2_0:         .byte $82,$00,$00,$00,$00       ; 2.0 (max curvature)
 fp_4_0:         .byte $83,$00,$00,$00,$00       ; 4.0 (max baseSpeed)
 fp_100:         .byte $87,$48,$00,$00,$00       ; 100.0 (for N.NN display)
+
+; Page address table: page_addr[N] = doc_buffer + N * 960
+; 11 entries (pages 0-10, where entry 10 = end of 10 pages)
+; 960 = $03C0
+page_addr_lo:
+        .byte <(doc_buffer)
+        .byte <(doc_buffer + 960)
+        .byte <(doc_buffer + 1920)
+        .byte <(doc_buffer + 2880)
+        .byte <(doc_buffer + 3840)
+        .byte <(doc_buffer + 4800)
+        .byte <(doc_buffer + 5760)
+        .byte <(doc_buffer + 6720)
+        .byte <(doc_buffer + 7680)
+        .byte <(doc_buffer + 8640)
+        .byte <(doc_buffer + 9600)
+page_addr_hi:
+        .byte >(doc_buffer)
+        .byte >(doc_buffer + 960)
+        .byte >(doc_buffer + 1920)
+        .byte >(doc_buffer + 2880)
+        .byte >(doc_buffer + 3840)
+        .byte >(doc_buffer + 4800)
+        .byte >(doc_buffer + 5760)
+        .byte >(doc_buffer + 6720)
+        .byte >(doc_buffer + 7680)
+        .byte >(doc_buffer + 8640)
+        .byte >(doc_buffer + 9600)
 
 ; Blank row macro
 .define BLK __,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
@@ -1574,15 +2532,15 @@ text_data:
 text_data_end:
 
 ; =============================================================================
-;  Sprite data at $2000 — dedicated SPRITES segment
+;  Sprite data at $3000 — dedicated SPRITES segment
 ;  Right-pointing (►) for left side, Left-pointing (◄) for right side
 ;  Each sprite: 24×21 pixels = 63 bytes + 1 pad = 64 bytes
-;  Sprite 0 pointer = $2000/64 = $80
-;  Sprite 1 pointer = $2040/64 = $81
+;  Sprite 0 pointer = $3000/64 = $C0
+;  Sprite 1 pointer = $3040/64 = $C1
 ; =============================================================================
 .segment "SPRITES"
 
-spr_right_tri:  ; at $2000
+spr_right_tri:  ; at $3000
         .byte $80,$00,$00           ; Row 0:  *
         .byte $C0,$00,$00           ; Row 1:  **
         .byte $E0,$00,$00           ; Row 2:  ***
@@ -1606,7 +2564,7 @@ spr_right_tri:  ; at $2000
         .byte $80,$00,$00           ; Row 20: *
         .byte $00                   ; Pad to 64 bytes
 
-spr_left_tri:   ; at $2040
+spr_left_tri:   ; at $3040
         .byte $00,$00,$01           ; Row 0:                        *
         .byte $00,$00,$03           ; Row 1:                       **
         .byte $00,$00,$07           ; Row 2:                      ***
@@ -1629,3 +2587,11 @@ spr_left_tri:   ; at $2040
         .byte $00,$00,$03           ; Row 19:                       **
         .byte $00,$00,$01           ; Row 20:                        *
         .byte $00                   ; Pad to 64 bytes
+
+; =============================================================================
+;  BSS segment — runtime-only document buffer (not stored in PRG file)
+; =============================================================================
+.segment "BSS"
+
+save_header:    .res 1              ; total_pages (saved to disk as first byte)
+doc_buffer:     .res 9600           ; 10 pages × 960 bytes (24 rows × 40 cols)
