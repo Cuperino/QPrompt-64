@@ -1,9 +1,9 @@
 Modules list:
 -------------
 scroll.o:
-    CODE              Offs=000000  Size=00099C  Align=00001  Fill=0000
-    RODATA            Offs=000000  Size=000DD9  Align=00001  Fill=0000
-    ZEROPAGE          Offs=000000  Size=00000F  Align=00001  Fill=0000
+    CODE              Offs=000000  Size=000869  Align=00001  Fill=0000
+    RODATA            Offs=000000  Size=000A0A  Align=00001  Fill=0000
+    ZEROPAGE          Offs=000000  Size=00000E  Align=00001  Fill=0000
     LOADADDR          Offs=000000  Size=000002  Align=00001  Fill=0000
     STARTUP           Offs=000000  Size=00000C  Align=00001  Fill=0000
     SPRITES           Offs=000000  Size=000080  Align=00001  Fill=0000
@@ -13,11 +13,11 @@ Segment list:
 -------------
 Name                   Start     End    Size  Align
 ----------------------------------------------------
-ZEROPAGE              000002  000010  00000F  00001
+ZEROPAGE              000002  00000F  00000E  00001
 LOADADDR              0007FF  000800  000002  00001
 STARTUP               000801  00080C  00000C  00001
-CODE                  00080D  0011A8  00099C  00001
-RODATA                0011A9  001F81  000DD9  00001
+CODE                  00080D  001075  000869  00001
+RODATA                001076  001A7F  000A0A  00001
 SPRITES               002000  00207F  000080  00001
 
 

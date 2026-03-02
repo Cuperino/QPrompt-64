@@ -191,14 +191,14 @@ start:
         lda #$01
         sta VIC_IRQ_MASK            ; enable VIC raster IRQ
 
-        ; Start with zone-on IRQ at raster 119
+        ; Start with zone-on IRQ (fires 2 lines early for stable raster)
         lda #0
         sta irq_state
 
         lda VIC_CTRL1
         and #$7F                    ; clear raster bit 8
         sta VIC_CTRL1
-        lda #RASTER_ZONE_ON
+        lda #(RASTER_ZONE_ON - 3)
         sta VIC_RASTER
 
         ; Point IRQ vector
@@ -240,7 +240,7 @@ clear_screen:
 @cs1:   sta SCREEN, x
         sta SCREEN+256, x
         sta SCREEN+512, x
-        sta SCREEN+768, x
+        sta SCREEN+744, x
         inx
         bne @cs1
 
@@ -286,13 +286,13 @@ clear_screen:
         inx
         bne @cr2b
 
-        ; Bytes 768-999: rows 19-24 (white)
+        ; Page 3: COLRAM+768..1023 (rows 19-24, 24 extra bytes harmless)
         lda #WHITE
         ldx #0
-@cr3:   sta COLRAM+744, x
+@cr3:   sta COLRAM+768, x
         inx
-        cpx #232
         bne @cr3
+
         rts
 
 
@@ -561,7 +561,7 @@ config_screen:
 @ccr:   sta COLRAM, x
         sta COLRAM+256, x
         sta COLRAM+512, x
-        sta COLRAM+744, x
+        sta COLRAM+768, x
         inx
         bne @ccr
         rts
@@ -674,14 +674,23 @@ display_fixed2:
 
 
 ; =============================================================================
-; Raster IRQ handler — 5-point chain
+; Raster IRQ handler — 5-point chain with raster-line polling
+;
+; Each color-change IRQ fires 3 lines before the target raster.  After
+; dispatch, the handler polls VIC_RASTER (CPX $D012 / BNE, 7-cycle loop)
+; until the exact target line appears, then writes the color register
+; immediately.  This technique is immune to variable IRQ entry latency
+; (from coarse-scroll routines with 4-5 cycle instructions) and VIC-II
+; bad-line cycle stealing (~40 cycles), both of which disrupted the old
+; NOP-delay approach.  The 7-cycle polling loop gives ≤6 cycles of write
+; jitter, which always lands in the left border (invisible).
 ;
 ; Per-frame order (ascending raster values):
-;   State 0 → raster 119  : zone on  (dark gray bg + border)
-;   State 3 → raster 140  : indicator on (light blue border)
-;   State 4 → raster 152  : indicator off (dark gray border)
-;   State 1 → raster 175  : zone off (black bg + border)
-;   State 2 → raster 250  : scroll update
+;   State 0 → fires raster 120 : zone on  (dark gray bg + border from 123)
+;   State 3 → fires raster 141 : indicator on (light blue border from 144)
+;   State 4 → fires raster 153 : indicator off (dark gray border from 156)
+;   State 1 → fires raster 176 : zone off (black bg + border from 179)
+;   State 2 → fires raster 250 : scroll update (no alignment needed)
 ;
 ; Chain: 0 → 3 → 4 → 1 → 2 → 0
 ; =============================================================================
@@ -695,63 +704,102 @@ irq_handler:
         jmp @state2
 @not_state2:
         cmp #1
-        beq @state1
+        bne @not_state1
+        jmp @state1
+@not_state1:
         cmp #3
-        beq @state3
+        bne @not_state3
+        jmp @state3
+@not_state3:
         cmp #4
-        beq @state4
+        bne @state0
+        jmp @state4
 @state0:
-
-        ; --- State 0: zone start (raster 119) ---
+        ; --- State 0: zone start ---
+        ; Poll target-1, then NOP-delay to HBLANK so both writes land at
+        ; cycles 0-10 on target (before visible area).  When target-1 is a
+        ; bad line (fine_scroll matches), skip delay — the bad-line halt
+        ; already consumed the extra cycles.
         lda #DARK_GRAY
-        sta VIC_BG
+        ldx #(RASTER_ZONE_ON - 1)
+@w0:    cpx VIC_RASTER
+        bne @w0
+        ldy fine_scroll
+        cpy #((RASTER_ZONE_ON - 1) & 7)
+        beq @s0_bl
+        .repeat 25
+        nop
+        .endrepeat
         sta VIC_BORDER
-
-        ; Next: indicator on at raster 140
-        lda #RASTER_INDICATOR_ON
+        sta VIC_BG
+        jmp @s0_done
+@s0_bl: sta VIC_BORDER
+        sta VIC_BG
+@s0_done:
+        lda #(RASTER_INDICATOR_ON - 3)
         sta VIC_RASTER
         lda #3
         sta irq_state
         jmp $EA81
 
 @state3:
-        ; --- State 3: indicator on (raster 140) ---
+        ; --- State 3: indicator on ---
+        ; Sprite DMA on these lines (140-160) prevents poll exit before cycle 3,
+        ; so STA lands at cycles 9-12 — before visible border at ~cycle 14.
         lda #LIGHT_BLUE
+        ldx #RASTER_INDICATOR_ON
+@w3:    cpx VIC_RASTER
+        bne @w3
         sta VIC_BORDER
-
-        lda #RASTER_INDICATOR_OFF
+        lda #(RASTER_INDICATOR_OFF - 3)
         sta VIC_RASTER
         lda #4
         sta irq_state
         jmp $EA81
 
 @state4:
-        ; --- State 4: indicator off (raster 152) ---
+        ; --- State 4: indicator off ---
+        ; Sprite DMA on these lines (140-160) prevents poll exit before cycle 3,
+        ; so STA lands at cycles 9-12 — before visible border at ~cycle 14.
         lda #DARK_GRAY
+        ldx #RASTER_INDICATOR_OFF
+@w4:    cpx VIC_RASTER
+        bne @w4
         sta VIC_BORDER
-
-        lda #RASTER_ZONE_OFF
+        lda #(RASTER_ZONE_OFF - 3)
         sta VIC_RASTER
         lda #1
         sta irq_state
         jmp $EA81
 
 @state1:
-        ; --- State 1: zone end (raster 175) ---
+        ; --- State 1: zone end ---
         lda #0
+        ldx #(RASTER_ZONE_OFF - 1)
+@w1:    cpx VIC_RASTER
+        bne @w1
+        ldy fine_scroll
+        cpy #((RASTER_ZONE_OFF - 1) & 7)
+        beq @s1_bl
+        .repeat 25
+        nop
+        .endrepeat
+        sta VIC_BORDER
         sta VIC_BG
-        sta VIC_BORDER              ; border back to black
+        jmp @s1_done
+@s1_bl: sta VIC_BORDER
+        sta VIC_BG
+@s1_done:
+
         lda #RASTER_SCROLL
         sta VIC_RASTER
         lda #2
         sta irq_state
-        jmp $EA81                   ; quick RTI — KERNAL handler only runs
-                                    ; from State 2 (raster 250, bottom border)
-                                    ; to avoid any side effects during visible area
+        jmp $EA81
 
 @state2:
         ; --- State 2: scroll update (raster 250) ---
-        lda #RASTER_ZONE_ON
+        lda #(RASTER_ZONE_ON - 3)
         sta VIC_RASTER
         lda #0
         sta irq_state
@@ -829,14 +877,10 @@ scroll_screen_up:
         bne @p2
 
         ldx #0
-@p3:    lda SCREEN+SCREEN_COLS+768, x
-        sta SCREEN+768, x
+@p3:    lda SCREEN+SCREEN_COLS+744, x
+        sta SCREEN+744, x
         inx
-        cpx #((ROWS-1)*SCREEN_COLS - 768)
         bne @p3
-
-        ; Colour RAM is NOT copied — all cells share the same colour,
-        ; so only the new bottom row needs its colour set (done below).
 
         ; Fill bottom row (row 24 = offset 960) with next text line
         lda text_lo
@@ -1270,7 +1314,7 @@ switch_to_config:
         lda #0
         sta irq_state
 
-        lda #RASTER_ZONE_ON
+        lda #(RASTER_ZONE_ON - 2)
         sta VIC_RASTER
 
         ; Set VIC_CTRL1 for scrolling: DEN=1, RSEL=0, YSCROLL=fine_scroll
