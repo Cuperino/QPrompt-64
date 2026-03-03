@@ -137,13 +137,19 @@ main_dispatch:
         sta VIC_BORDER
         sta VIC_BG
         jsr enter_editor
-        ; Editor returned (F1 pressed) — came_from = 1
+        ; Editor returned — A: 0=go to config, 1=go to scroll
+        cmp #1
+        beq @md_ed_to_scroll
+        ; Go to config
         lda #$0E
         sta VIC_BORDER
         lda #$06
         sta VIC_BG
         jsr build_velocity_table
         jsr config_screen
+        jmp main_dispatch
+@md_ed_to_scroll:
+        lda #0                      ; destination = scroll
         jmp main_dispatch
 
 ; --- Enter scroll mode and run scroll loop ---
@@ -285,13 +291,19 @@ enter_scroll_mode:
         sta VIC_BORDER
         sta VIC_BG
         jsr enter_editor
-        ; Editor returned (F1) — go to config
+        ; Editor returned — A: 0=config, 1=scroll
+        cmp #1
+        beq @ste_to_scroll
+        ; Go to config
         lda #$0E
         sta VIC_BORDER
         lda #$06
         sta VIC_BG
         jsr build_velocity_table
         jsr config_screen
+        jmp main_dispatch
+@ste_to_scroll:
+        lda #0                      ; destination = scroll
         jmp main_dispatch
 
 
@@ -647,6 +659,14 @@ config_screen:
         inx
         bne @in4
 @in4d:
+        ; Row 23: "QPROMPT 64" centered (col 15)
+        ldx #0
+@in5:   lda @str_title, x
+        beq @in5d
+        sta SCREEN + 23*40 + 15, x
+        inx
+        bne @in5
+@in5d:
 
         ; Set all color RAM to white
         lda #WHITE
@@ -703,6 +723,8 @@ config_screen:
         .byte sc_R,sc_E,sc_T,sc_U,sc_R,sc_N,$2F,sc_F,$35,__,$3D,__,sc_S,sc_T,sc_A,sc_R,sc_T,0
 @str_instr4:
         .byte sc_F,$33,__,$3D,__,sc_E,sc_D,sc_I,sc_T,sc_O,sc_R,0
+@str_title:
+        .byte sc_Q,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,__,$36,$34,0
 
 
 ; ---- Display float as "N.NN" -----------------------------------------------
@@ -1460,10 +1482,18 @@ editor_loop:
         bne @not_f8
         jmp ed_prev_page
 @not_f8:
+        cmp #$87                    ; F5 → exit to scroll
+        bne @not_f5
+        jmp ed_exit_to_scroll
+@not_f5:
         cmp #$85                    ; F1 → exit to config
         bne @not_f1_ed
         jmp ed_exit
 @not_f1_ed:
+        cmp #$86                    ; F3 → exit to scroll
+        bne @not_f3_ed
+        jmp ed_exit_to_scroll
+@not_f3_ed:
         cmp #$0D                    ; RETURN
         bne @not_return
         jmp ed_return_key
@@ -1497,10 +1527,10 @@ editor_loop:
 ed_printable:
         ; A = screen code to place
         pha
-        jsr undraw_cursor           ; restore original char
-        pla
+        jsr undraw_cursor           ; restore original char (also sets zp_dst)
+        jsr ed_calc_cursor_addr     ; zp_dst = screen addr of cursor (trashes A)
+        pla                         ; restore screen code AFTER addr calc
         ; Write at cursor position
-        jsr ed_calc_cursor_addr     ; zp_dst = screen addr of cursor
         ldy #0
         sta (zp_dst), y
         ; Advance cursor right
@@ -1603,6 +1633,7 @@ ed_cursor_right:
 
 ; ---- F7: Next page ----------------------------------------------------------
 ed_next_page:
+        jsr undraw_cursor
         jsr save_editor_page
         lda current_page
         clc
@@ -1634,11 +1665,25 @@ ed_next_page:
 @enp_no_more:
         jmp editor_loop
 
-; ---- F8: Prev page ----------------------------------------------------------
+; ---- F8/F5: Prev page -------------------------------------------------------
 ed_prev_page:
         lda current_page
         beq @epp_done               ; already at page 0
+        jsr undraw_cursor
         jsr save_editor_page
+        ; Check if we're on the last page and it's empty → remove it
+        lda current_page
+        clc
+        adc #1
+        cmp total_pages             ; are we on the last page?
+        bne @epp_no_trim
+        lda total_pages
+        cmp #2                      ; need at least 2 pages to trim (keep min 1)
+        bcc @epp_no_trim
+        jsr check_page_empty        ; checks current_page, sets carry if empty
+        bcc @epp_no_trim
+        dec total_pages             ; remove the empty last page
+@epp_no_trim:
         dec current_page
         jsr load_editor_page
         jsr draw_status_bar
@@ -1655,6 +1700,16 @@ ed_exit:
         jsr save_editor_page
         lda #1
         sta came_from               ; came from editor
+        lda #0                      ; return 0 = go to config
+        rts
+
+; ---- F3: Exit to scroll -----------------------------------------------------
+ed_exit_to_scroll:
+        jsr undraw_cursor
+        jsr save_editor_page
+        lda #1
+        sta came_from               ; came from editor
+        lda #1                      ; return 1 = go to scroll
         rts
 
 ; ---- Calculate cursor screen address ----------------------------------------
@@ -1723,17 +1778,37 @@ petscii_to_screencode_editor:
         cmp #$20
         bcc @pts_reject
         cmp #$40
-        bcc @pts_direct             ; $20-$3F → same screen code
+        bcc @pts_direct             ; $20-$3F → same screen code (space, digits, punctuation)
         cmp #$60
-        bcc @pts_alpha              ; $40-$5F → AND #$3F
+        bcc @pts_upper              ; $40-$5F → AND #$3F (uppercase letters, @, [, etc.)
+        cmp #$80
+        bcc @pts_reject             ; $60-$7F → reject (control chars)
+        cmp #$A0
+        bcc @pts_reject             ; $80-$9F → reject (control chars)
+        cmp #$C0
+        bcc @pts_gfx                ; $A0-$BF → shifted punctuation/graphics
+        cmp #$E0
+        bcc @pts_lower              ; $C0-$DF → lowercase letters (AND #$3F → same as uppercase screen codes, but use AND #$7F for shifted gfx)
+        ; $E0-$FE → shifted graphics
+        and #$7F                    ; map to $60-$7E screen codes
+        clc
+        rts
 @pts_reject:
         sec
         rts
 @pts_direct:
         clc
         rts
-@pts_alpha:
-        and #$3F
+@pts_upper:
+        and #$3F                    ; PETSCII $41-$5A → screen $01-$1A
+        clc
+        rts
+@pts_gfx:
+        sbc #$3F                    ; PETSCII $A0-$BF → screen $60-$7F (carry is set from cmp)
+        clc
+        rts
+@pts_lower:
+        and #$3F                    ; PETSCII $C1-$DA → screen $01-$1A (same as uppercase)
         clc
         rts
 
@@ -1832,6 +1907,44 @@ fill_page_spaces:
         iny
         cpy #192
         bne @fps_tail
+        rts
+
+; ---- Check if current page (in doc_buffer) is all spaces --------------------
+; Output: carry set = empty, carry clear = has content
+; ---------------------------------------------------------------------------
+check_page_empty:
+        ldx current_page
+        lda page_addr_lo, x
+        sta zp_src
+        lda page_addr_hi, x
+        sta zp_src+1
+
+        ; Check 960 bytes: 3 full pages + 192 bytes
+        ldx #3
+@cpe_full:
+        ldy #0
+@cpe_byte:
+        lda (zp_src), y
+        cmp #$20
+        bne @cpe_not_empty
+        iny
+        bne @cpe_byte
+        inc zp_src+1
+        dex
+        bne @cpe_full
+        ; Check remaining 192 bytes
+        ldy #0
+@cpe_tail:
+        lda (zp_src), y
+        cmp #$20
+        bne @cpe_not_empty
+        iny
+        cpy #192
+        bne @cpe_tail
+        sec                         ; all spaces = empty
+        rts
+@cpe_not_empty:
+        clc                         ; has content
         rts
 
 ; ---- Draw status bar on row 24 ---------------------------------------------
@@ -2165,8 +2278,8 @@ init_document:
 ; Appends 1000 bytes (25 blank lines) as scroll_trail after document content.
 ; ---------------------------------------------------------------------------
 prepare_scroll_text:
-        ; Save current editor page
-        jsr save_editor_page
+        ; Note: editor page is already saved by ed_exit before we get here.
+        ; Do NOT call save_editor_page — screen may contain config/scroll content.
 
         ; scroll_start = doc_buffer
         lda #<doc_buffer
