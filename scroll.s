@@ -2751,6 +2751,8 @@ render_init:
         sta rnd_hist_bot_head
         sta rnd_hist_bot_count
         sta rnd_top_row
+        lda #4
+        sta rnd_top_skip
 
         lda scroll_start_lo
         sta zp_src
@@ -2911,6 +2913,25 @@ render_advance_top:
         lda rnd_top_row
         cmp #3
         bne @rat_done
+        ; Check if we are still in the initial blank-tile phase.
+        ; The top 12 screen rows are blank at init (4 blank tiles).
+        ; rnd_top_skip counts down from 4; while > 0 we suppress history
+        ; pushes so that the top cursor stays in sync with the screen top
+        ; without poisoning the history ring with document positions that
+        ; are still visible on screen.
+        lda rnd_top_skip
+        beq @rat_do_push        ; skip exhausted — normal rollover
+        dec rnd_top_skip
+        bne @rat_full_skip      ; skip still > 0 — blank tile, no render
+        ; skip just reached 0: render line 0 into linebuf but do NOT push
+        ; to history (line 0 is arriving at the top for the first time).
+        jmp @rat_render
+@rat_full_skip:
+        ; Still in blank region — just reset the row counter and return.
+        lda #0
+        sta rnd_top_row
+        rts
+@rat_do_push:
         ; push old rnd_top_lo/hi to top history ring
         ldx rnd_hist_head
         lda rnd_top_lo
@@ -2925,9 +2946,9 @@ render_advance_top:
         stx rnd_hist_head
         lda rnd_hist_count
         cmp #30
-        beq @rat_full
+        beq @rat_render
         inc rnd_hist_count
-@rat_full:
+@rat_render:
         ; advance top ptr to next rendered line
         lda rnd_top_next_lo
         sta rnd_top_lo
@@ -3653,3 +3674,4 @@ rnd_top_next_lo: .res 1            ; doc ptr lo of rendered line after current t
 rnd_top_next_hi: .res 1
 rnd_bot_next_lo: .res 1            ; doc ptr lo of rendered line after current bot linebuf
 rnd_bot_next_hi: .res 1
+rnd_top_skip:    .res 1            ; blank-tile rollover skip count (counts down from 4 at init)
