@@ -191,6 +191,7 @@ enter_scroll_mode:
         sta do_coarse
         sta do_coarse_down
         sta enter_config
+        sta fwd_limit_reached
 
         ; 40-col mode
         lda #$08                    ; CSEL=1, XSCROLL=0
@@ -234,6 +235,9 @@ enter_scroll_mode:
         ; Switch to custom charset at $2800 for large-character rendering
         lda #$1A                    ; screen@$0400, charset@$2800 (bank 0)
         sta $D018
+
+        ; Count rendered content lines and compute forward scroll limit
+        jsr count_rendered_lines
 
         ; Build render state and fill screen with large-character tiles
         jsr render_init
@@ -958,12 +962,22 @@ irq_handler:
         dec fine_scroll
         lda fine_scroll
         bpl @s2_fwd_next
+        ; fine_scroll underflowed — check forward limit
+        lda fwd_limit_reached
+        bne @s2_fwd_clamp
         lda #7
         sta fine_scroll
         inc do_coarse
 @s2_fwd_next:
         dex
         bne @s2_fwd
+        jmp @s2_update_vic
+@s2_fwd_clamp:
+        ; At forward limit: snap fine_scroll to 0, zero velocity
+        lda #0
+        sta fine_scroll
+        sta current_step
+        sta scroll_accum
         jmp @s2_update_vic
 
         ; --- Reverse: increment fine_scroll, coarse down on overflow ---
@@ -1003,6 +1017,29 @@ irq_handler:
 
 ; ---- Coarse scroll ----------------------------------------------------------
 scroll_screen_up:
+        ; --- Forward limit check: rows_from_start >= max_rows_fwd? ---
+        lda rows_from_start_hi
+        cmp max_rows_fwd_hi
+        bcc @ssu_ok                 ; hi < → allow
+        bne @ssu_limit              ; hi > → at limit
+        lda rows_from_start_lo
+        cmp max_rows_fwd_lo
+        bcc @ssu_ok                 ; lo < → allow
+@ssu_limit:
+        ; At forward limit: snap fine_scroll, zero velocity, return
+        lda #0
+        sta fine_scroll
+        sta current_step
+        sta scroll_accum
+        sta do_coarse
+        lda #%00010000              ; DEN + YSCROLL=0
+        sta VIC_CTRL1
+        lda #1
+        sta fwd_limit_reached
+        rts
+@ssu_ok:
+        lda #0
+        sta fwd_limit_reached
         ldx #0
 @p0:    lda SCREEN+SCREEN_COLS, x
         sta SCREEN, x
@@ -1095,6 +1132,9 @@ scroll_screen_down:
         sta scroll_accum
         rts
 @ssd_ok:
+        ; Clear forward limit flag (we're scrolling backward)
+        lda #0
+        sta fwd_limit_reached
         ; Decrement rows_from_start (already know it's > 0)
         lda rows_from_start_lo
         bne @ssd_dec_lo
@@ -2799,6 +2839,55 @@ render_compute_line:
 @chi:       .byte 0
 
 ; ---------------------------------------------------------------------------
+;  count_rendered_lines
+;  Iterates through the entire document text, calling render_compute_line to
+;  count how many rendered lines the content produces.  Stores the forward
+;  scroll limit (3 × line count) in max_rows_fwd_lo/hi.
+;  Must be called BEFORE render_init (uses rnd_bot_linebuf as scratch).
+; ---------------------------------------------------------------------------
+count_rendered_lines:
+        lda scroll_start_lo
+        sta zp_src
+        lda scroll_start_hi
+        sta zp_src+1
+        lda #0
+        sta max_rows_fwd_lo
+        sta max_rows_fwd_hi
+@crl_loop:
+        ; check if zp_src >= scroll_end
+        lda zp_src+1
+        cmp scroll_end_hi
+        bcc @crl_count
+        bne @crl_done
+        lda zp_src
+        cmp scroll_end_lo
+        bcs @crl_done
+@crl_count:
+        lda #<rnd_bot_linebuf
+        sta zp_dst
+        lda #>rnd_bot_linebuf
+        sta zp_dst+1
+        jsr render_compute_line
+        ; max_rows_fwd += 3
+        clc
+        lda max_rows_fwd_lo
+        adc #3
+        sta max_rows_fwd_lo
+        bcc @crl_loop
+        inc max_rows_fwd_hi
+        jmp @crl_loop
+@crl_done:
+        ; Add 3 extra rows so last content line stops at screen row 6
+        clc
+        lda max_rows_fwd_lo
+        adc #3
+        sta max_rows_fwd_lo
+        bcc @crl_ret
+        inc max_rows_fwd_hi
+@crl_ret:
+        rts
+
+; ---------------------------------------------------------------------------
 ;  render_init
 ;  Initialise render cursors and fill all 25 screen rows with large chars.
 ;  Called from enter_scroll_mode before IRQ chain is installed.
@@ -3740,3 +3829,6 @@ rnd_top_skip:    .res 1            ; blank-tile rollover skip count (counts down
 rows_from_start_lo: .res 1        ; 16-bit coarse-row distance from starting position (lo)
 rows_from_start_hi: .res 1        ;   (hi) — clamped at 0, prevents reverse past doc start
 ssd_fill_blank:  .res 1           ; non-zero → top retreat clamped, fill row 0 with blank
+max_rows_fwd_lo: .res 1           ; 16-bit forward scroll limit (lo) = 3 × rendered line count
+max_rows_fwd_hi: .res 1           ;   (hi)
+fwd_limit_reached: .res 1        ; nonzero → at forward scroll limit (used by IRQ to avoid flicker)
