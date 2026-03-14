@@ -3001,13 +3001,13 @@ render_advance_top:
         lda rnd_top_hi
         sta rnd_hist_hi, x
         inx
-        cpx #30
+        cpx #240
         bne @rat_nw
         ldx #0
 @rat_nw:
         stx rnd_hist_head
         lda rnd_hist_count
-        cmp #30
+        cmp #240
         beq @rat_render
         inc rnd_hist_count
 @rat_render:
@@ -3049,13 +3049,13 @@ render_advance_bot:
         lda rnd_bot_hi
         sta rnd_hist_bot_hi, x
         inx
-        cpx #30
+        cpx #240
         bne @rab_nw
         ldx #0
 @rab_nw:
         stx rnd_hist_bot_head
         lda rnd_hist_bot_count
-        cmp #30
+        cmp #240
         beq @rab_full
         inc rnd_hist_bot_count
 @rab_full:
@@ -3095,13 +3095,13 @@ render_retreat_top:
         sta rnd_top_next_lo
         lda rnd_top_hi
         sta rnd_top_next_hi
-        ; pop from ring: head = (head-1+30) mod 30
+        ; pop from ring: head = (head-1+240) mod 240
         lda rnd_hist_head
         beq @rrt_wrap_h
         dec rnd_hist_head
         jmp @rrt_got_h
 @rrt_wrap_h:
-        lda #29
+        lda #239
         sta rnd_hist_head
 @rrt_got_h:
         dec rnd_hist_count
@@ -3150,7 +3150,7 @@ render_retreat_bot:
         dec rnd_hist_bot_head
         jmp @rrb_got_h
 @rrb_wrap_h:
-        lda #29
+        lda #239
         sta rnd_hist_bot_head
 @rrb_got_h:
         dec rnd_hist_bot_count
@@ -3712,13 +3712,13 @@ doc_buffer:     .res 9600           ; 10 pages × 960 bytes (24 rows × 40 cols)
 ; ---------------------------------------------------------------------------
 rnd_top_linebuf: .res 120           ; 3 tile rows × 40 cols for current top rendered line
 rnd_bot_linebuf: .res 120           ; 3 tile rows × 40 cols for current bottom rendered line
-rnd_hist_lo:    .res 30             ; top history ring: lo byte of doc ptr at line starts
-rnd_hist_hi:    .res 30             ; top history ring: hi byte
-rnd_hist_head:  .res 1              ; top ring write index (0-29)
-rnd_hist_count: .res 1              ; top ring valid entries (0-30)
-rnd_hist_bot_lo:  .res 30           ; bot history ring: lo byte
-rnd_hist_bot_hi:  .res 30           ; bot history ring: hi byte
-rnd_hist_bot_head:.res 1            ; bot ring write index
+rnd_hist_lo:    .res 240            ; top history ring: lo byte of doc ptr at line starts
+rnd_hist_hi:    .res 240            ; top history ring: hi byte
+rnd_hist_head:  .res 1              ; top ring write index (0-239)
+rnd_hist_count: .res 1              ; top ring valid entries (0-240, fits in one byte)
+rnd_hist_bot_lo:  .res 240          ; bot history ring: lo byte
+rnd_hist_bot_hi:  .res 240          ; bot history ring: hi byte
+rnd_hist_bot_head:.res 1            ; bot ring write index (0-239)
 rnd_hist_bot_count:.res 1           ; bot ring valid entries
 
 ; Word-wrap temporaries (used only inside render_compute_line)
