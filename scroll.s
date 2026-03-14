@@ -182,7 +182,7 @@ enter_scroll_mode:
         ; Initialise scroll state
         lda #7
         sta fine_scroll
-        lda #3                      ; default step 3 (moderate speed)
+        lda #0                      ; start at step 0 (stationary)
         sta current_step
         lda #1                      ; forward direction
         sta direction
@@ -2759,33 +2759,49 @@ render_init:
         sta zp_src+1
         sta rnd_top_hi
 
-        ; Screen write destination pointer starts at SCREEN
+        ; ── Blank rnd_top_linebuf; text starts at screen row 12 (line 13) ───
+        ; rnd_top_next = scroll_start so first top-cursor advance (after 3
+        ; forward scrolls) renders doc line 0 into the linebuf.
+        lda scroll_start_lo
+        sta rnd_top_next_lo
+        lda scroll_start_hi
+        sta rnd_top_next_hi
+        lda #0
+        ldy #0
+@ri_clr_top:
+        sta rnd_top_linebuf, y
+        iny
+        cpy #120
+        bne @ri_clr_top
+
+        ; ── Zero-fill screen rows 0-11 (480 bytes = 2×256 - 32) ─────────
         lda #<SCREEN
         sta zp_dst
         lda #>SCREEN
         sta zp_dst+1
+        lda #0
+        ldy #0
+@ri_clr_scr1:
+        sta (zp_dst), y
+        iny
+        bne @ri_clr_scr1            ; first 256 bytes (rows 0–6)
+        inc zp_dst+1
+        ldy #0
+@ri_clr_scr2:
+        sta (zp_dst), y
+        iny
+        cpy #224
+        bne @ri_clr_scr2            ; 224 more bytes (rows 6–11), total 480
 
-        ; ── Render line 0 → rnd_top_linebuf ──────────────────────────────
-        jsr @ri_render_top      ; uses zp_src, leaves next ptr in zp_src
-        lda zp_src
-        sta rnd_top_next_lo
-        lda zp_src+1
-        sta rnd_top_next_hi
-        ; copy 120 bytes from rnd_top_linebuf to screen (advances zp_dst by 120)
-        lda #<rnd_top_linebuf
-        sta zp_src
-        lda #>rnd_top_linebuf
-        sta zp_src+1
-        jsr @ri_copy120_adv
-        ; restore zp_src to next doc ptr
-        lda rnd_top_next_lo
-        sta zp_src
-        lda rnd_top_next_hi
-        sta zp_src+1
+        ; ── Set destination to screen row 12 (SCREEN + 480) ──────────────
+        lda #<(SCREEN + 480)
+        sta zp_dst
+        lda #>(SCREEN + 480)
+        sta zp_dst+1
 
-        ; ── Lines 1-7: render into rnd_bot_linebuf, copy to screen ───────
-        ldx #7
-@ri_l7: stx @ri_cnt
+        ; ── Lines 0-3: render into rnd_bot_linebuf, copy to rows 12-23 ───
+        ldx #4
+@ri_l4: stx @ri_cnt
         jsr @ri_render_bot      ; renders to rnd_bot_linebuf, advances zp_src
         lda zp_src
         sta @ri_next_lo
@@ -2802,9 +2818,9 @@ render_init:
         sta zp_src+1
         ldx @ri_cnt
         dex
-        bne @ri_l7
+        bne @ri_l4
 
-        ; ── Render line 8 → rnd_bot_linebuf (final bot position) ─────────
+        ; ── Render line 4 → rnd_bot_linebuf (final bot position) ─────────
         lda zp_src
         sta rnd_bot_lo
         lda zp_src+1
