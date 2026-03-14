@@ -92,6 +92,17 @@ total_pages:    .res 1              ; number of pages (1-based, max 10)
 came_from:      .res 1              ; 0=initial, 1=editor, 2=scroll
 first_run:      .res 1              ; 1=first RETURN on config goes to editor
 
+; Render engine cursor state ($0016-$001D)
+rnd_top_lo:     .res 1              ; top cursor: doc ptr lo (start of current top rendered line)
+rnd_top_hi:     .res 1              ; top cursor: doc ptr hi
+rnd_top_row:    .res 1              ; top cursor: tile row 0-2 currently at screen row 0
+rnd_bot_lo:     .res 1              ; bot cursor: doc ptr lo (start of current bottom rendered line)
+rnd_bot_hi:     .res 1              ; bot cursor: doc ptr hi
+rnd_bot_row:    .res 1              ; bot cursor: next tile row 0-2 to add at bottom
+rnd_out_lo:     .res 1              ; render work: output ptr lo
+rnd_out_hi:     .res 1              ; render work: output ptr hi
+rnd_wk_csrc:    .res 2              ; ZP: working source ptr for render word-measure and save
+
 ; ---------------------------------------------------------------------------
 ;  PRG load address (consumed by LOAD, not part of memory image)
 ; ---------------------------------------------------------------------------
@@ -220,8 +231,12 @@ enter_scroll_mode:
         lda #$01
         sta $CC                     ; $CC != 0 → cursor blink disabled
 
-        ; Fill screen with text data
-        jsr refill_screen
+        ; Switch to custom charset at $2800 for large-character rendering
+        lda #$1A                    ; screen@$0400, charset@$2800 (bank 0)
+        sta $D018
+
+        ; Build render state and fill screen with large-character tiles
+        jsr render_init
 
         ; ---- Install raster IRQ chain ----
         lda #$7F
@@ -999,50 +1014,47 @@ scroll_screen_up:
         inx
         bne @p3
 
-        ; Fill bottom row (row 24 = offset 960) with next text line
-        lda text_lo
+        ; Fill bottom row from render engine bot cursor
+        lda rnd_bot_row
+        beq @ssu_row0
+        cmp #1
+        beq @ssu_row1
+        lda #<(rnd_bot_linebuf + 80)
         sta zp_src
-        lda text_hi
+        lda #>(rnd_bot_linebuf + 80)
         sta zp_src+1
-
+        jmp @ssu_copy
+@ssu_row1:
+        lda #<(rnd_bot_linebuf + 40)
+        sta zp_src
+        lda #>(rnd_bot_linebuf + 40)
+        sta zp_src+1
+        jmp @ssu_copy
+@ssu_row0:
+        lda #<rnd_bot_linebuf
+        sta zp_src
+        lda #>rnd_bot_linebuf
+        sta zp_src+1
+@ssu_copy:
         ldy #0
-@fill:  lda (zp_src), y
+@ssu_fill:
+        lda (zp_src), y
         sta SCREEN + (ROWS-1)*SCREEN_COLS, y
         iny
         cpy #COLS
-        bne @fill
+        bne @ssu_fill
 
         ; Colour for new row = white
         lda #$0F
         ldy #0
-@clr:   sta COLRAM + (ROWS-1)*SCREEN_COLS, y
+@ssu_clr:
+        sta COLRAM + (ROWS-1)*SCREEN_COLS, y
         iny
         cpy #COLS
-        bne @clr
+        bne @ssu_clr
 
-        ; Advance text pointer by COLS
-        clc
-        lda text_lo
-        adc #COLS
-        sta text_lo
-        lda text_hi
-        adc #0
-        sta text_hi
-
-        ; Wrap check
-        lda text_hi
-        cmp scroll_end_hi
-        bcc @no_wrap
-        bne @wrap
-        lda text_lo
-        cmp scroll_end_lo
-        bcc @no_wrap
-@wrap:
-        lda scroll_start_lo
-        sta text_lo
-        lda scroll_start_hi
-        sta text_hi
-@no_wrap:
+        jsr render_advance_bot
+        jsr render_advance_top
         rts
 
 
@@ -1051,68 +1063,31 @@ scroll_screen_up:
 ; text data from text_ptr - 25*COLS.  Decrements text_ptr with wrapping.
 ; ---------------------------------------------------------------------------
 scroll_screen_down:
-        ; First, retreat text pointer by COLS (undo one advance)
-        sec
-        lda text_lo
-        sbc #COLS
-        sta text_lo
-        lda text_hi
-        sbc #0
-        sta text_hi
+        jsr render_retreat_top
+        jsr render_retreat_bot
 
-        ; Wrap check: if text_ptr < scroll_start, wrap to end
-        lda text_hi
-        cmp scroll_start_hi
-        bcc @wrap_down              ; hi byte below → wrap
-        bne @no_wrap_down           ; hi byte above → ok
-        lda text_lo
-        cmp scroll_start_lo
-        bcs @no_wrap_down           ; lo byte >= → ok
-@wrap_down:
-        ; Wrap to scroll_end - COLS
-        sec
-        lda scroll_end_lo
-        sbc #COLS
-        sta text_lo
-        lda scroll_end_hi
-        sbc #0
-        sta text_hi
-@no_wrap_down:
-
-        ; Compute fill source address for row 0: text_ptr - 1000
-        sec
-        lda text_lo
-        sbc #<1000
+        ; Set zp_src = rnd_top_linebuf + rnd_top_row*40 (source for row 0 fill)
+        lda rnd_top_row
+        beq @ssd_row0
+        cmp #1
+        beq @ssd_row1
+        lda #<(rnd_top_linebuf + 80)
         sta zp_src
-        lda text_hi
-        sbc #>1000
+        lda #>(rnd_top_linebuf + 80)
         sta zp_src+1
-
-        ; Handle wrap: if source < scroll_start, add text length
-        lda zp_src+1
-        cmp scroll_start_hi
-        bcc @src_wrap
-        bne @src_ok
-        lda zp_src
-        cmp scroll_start_lo
-        bcs @src_ok
-@src_wrap:
-        ; Add scroll_end - scroll_start to source
-        sec
-        lda scroll_end_lo
-        sbc scroll_start_lo
-        sta zp_dst              ; temp: text length lo
-        lda scroll_end_hi
-        sbc scroll_start_hi
-        sta zp_dst+1            ; temp: text length hi
-        clc
-        lda zp_src
-        adc zp_dst
+        jmp @ssd_src_ok
+@ssd_row1:
+        lda #<(rnd_top_linebuf + 40)
         sta zp_src
-        lda zp_src+1
-        adc zp_dst+1
+        lda #>(rnd_top_linebuf + 40)
         sta zp_src+1
-@src_ok:
+        jmp @ssd_src_ok
+@ssd_row0:
+        lda #<rnd_top_linebuf
+        sta zp_src
+        lda #>rnd_top_linebuf
+        sta zp_src+1
+@ssd_src_ok:
 
         ; Copy screen rows DOWN: row 23→24, 22→23, ..., 0→1
         ; Pages copied 0→1→2→3 so top rows update before the beam.
@@ -1374,6 +1349,10 @@ disable_raster_restore_kernal:
         sta $0314
         lda #$EA
         sta $0315
+
+        ; Restore ROM charset (editor/config use ROM charset at $1000)
+        lda #$14                    ; screen@$0400, ROM charset@$1000 (bank 0)
+        sta $D018
 
         ; Normal 25-row display
         lda #$1B
@@ -2434,6 +2413,675 @@ refill_screen:
         rts
 
 
+; ===========================================================================
+;  RENDER ENGINE — large-character scroll mode
+;  Converts editor text (screen codes) to 3×3 tile characters on the fly,
+;  with word-wrap and centering.  Each rendered line = 3 screen rows.
+; ===========================================================================
+
+; ---------------------------------------------------------------------------
+;  render_compute_line
+;  Word-wraps source text, centres, and writes 120 tile bytes (3×40) to buf.
+;  Input:  zp_src  = source ptr in doc_buffer
+;          zp_dst  = pointer to 120-byte output buffer
+;  Output: zp_src advanced to start of next rendered line
+;  Clobbers: A, X, Y, all rnd_wk_* vars, rnd_out_lo/hi
+; ---------------------------------------------------------------------------
+render_compute_line:
+        ; ── Phase 1: clear output buffer ────────────────────────────────────
+        lda zp_dst
+        sta rnd_out_lo
+        lda zp_dst+1
+        sta rnd_out_hi
+        lda #0
+        ldy #0
+@rcl_clr:
+        sta (rnd_out_lo), y
+        iny
+        cpy #120
+        bne @rcl_clr
+
+        ; ── Phase 2: word-wrap ───────────────────────────────────────────────
+        lda #0
+        sta rnd_wk_len
+        sta rnd_wk_wid
+        sta rnd_wk_first        ; 0 = "first word not yet placed"
+
+@ww_loop:
+        ; ── skip spaces and note if any were seen ────────────────────────────
+        lda #0
+        sta rnd_wk_sep          ; has_sep = 0
+@ww_skip_sp:
+        ; bounds check: zp_src >= scroll_end → done
+        lda zp_src+1
+        cmp scroll_end_hi
+        bcc @ww_not_end
+        bne @ww_jmp_done    ; hi byte above → done
+        lda zp_src
+        cmp scroll_end_lo
+        bcc @ww_not_end
+@ww_jmp_done:
+        jmp @ww_done
+@ww_not_end:
+        ldy #0
+        lda (zp_src), y
+        cmp #$20
+        bne @ww_no_sp
+        lda #1
+        sta rnd_wk_sep
+        inc zp_src
+        bne @ww_skip_sp
+        inc zp_src+1
+        jmp @ww_skip_sp
+@ww_no_sp:
+        ; ── measure next word (count non-space chars) ───────────────────────
+        lda zp_src
+        sta rnd_wk_csrc
+        lda zp_src+1
+        sta rnd_wk_csrc+1
+        lda #0
+        sta rnd_wk_wlen
+@ww_meas:
+        ; bounds check
+        lda rnd_wk_csrc+1
+        cmp scroll_end_hi
+        bcc @ww_m_ok
+        bne @ww_m_end
+        lda rnd_wk_csrc
+        cmp scroll_end_lo
+        bcs @ww_m_end
+@ww_m_ok:
+        ldy #0
+        lda (rnd_wk_csrc), y
+        cmp #$20
+        beq @ww_m_end
+        inc rnd_wk_csrc
+        bne @ww_m_ok2
+        inc rnd_wk_csrc+1
+@ww_m_ok2:
+        inc rnd_wk_wlen
+        lda rnd_wk_wlen
+        cmp #14             ; hard cap at 13 chars (13×3=39 tiles)
+        bne @ww_meas
+@ww_m_end:
+        ; if word length = 0 → end of text
+        lda rnd_wk_wlen
+        bne @ww_m_nonzero
+        jmp @ww_done
+@ww_m_nonzero:
+        ; ── compute word width = wlen*3 ──────────────────────────────────────
+        asl                 ; ×2
+        clc
+        adc rnd_wk_wlen     ; +wlen = ×3  (max 13×3=39, no overflow)
+        sta rnd_wk_wwidth
+        ; ── compute separator to add before this word ────────────────────────
+        lda rnd_wk_first
+        beq @ww_nosep       ; first word → no sep
+        lda rnd_wk_sep
+        beq @ww_nosep
+        lda #1
+        sta rnd_wk_sep
+        jmp @ww_chk_fit
+@ww_nosep:
+        lda #0
+        sta rnd_wk_sep
+@ww_chk_fit:
+        ; ── check if word fits: wid + sep + wwidth ≤ 40 ────────────────────
+        lda rnd_wk_wid
+        clc
+        adc rnd_wk_sep
+        clc
+        adc rnd_wk_wwidth
+        cmp #41             ; > 40?
+        bcc @ww_fits
+        ; doesn't fit
+        lda rnd_wk_len
+        bne @ww_done        ; not first word → end line
+        ; first word too wide → force-include (wlen capped at 13)
+        lda #0
+        sta rnd_wk_sep
+@ww_fits:
+        ; ── advance line width by sep ────────────────────────────────────────
+        lda rnd_wk_wid
+        clc
+        adc rnd_wk_sep
+        sta rnd_wk_wid
+        ; ── copy word chars and their x positions into rnd_wk_char/x ────────
+        lda #0
+        sta @wi             ; word char index
+@ww_addch:
+        lda @wi
+        cmp rnd_wk_wlen
+        beq @ww_adddone
+        lda rnd_wk_len
+        cmp #13
+        beq @ww_adddone     ; buffer full
+        tax                 ; X = current rnd_wk_len (index to write)
+        ; store x position
+        lda rnd_wk_wid
+        ldy @wi
+        ; x = rnd_wk_wid + wi*3
+        lda @wi
+        asl
+        sta @tmp_byte
+        lda @wi
+        clc
+        adc @tmp_byte       ; A = wi*3
+        clc
+        adc rnd_wk_wid      ; A = rnd_wk_wid + wi*3
+        sta rnd_wk_x, x
+        ; store screen code
+        ldy @wi
+        lda (zp_src), y
+        sta rnd_wk_char, x
+        inc rnd_wk_len
+        inc @wi
+        jmp @ww_addch
+@ww_adddone:
+        ; ── advance rnd_wk_wid and zp_src past this word ────────────────────
+        lda rnd_wk_wid
+        clc
+        adc rnd_wk_wwidth
+        sta rnd_wk_wid
+        ; advance zp_src by wlen bytes
+        lda rnd_wk_wlen
+        clc
+        adc zp_src
+        sta zp_src
+        bcc @ww_adv_ok
+        inc zp_src+1
+@ww_adv_ok:
+        lda #1
+        sta rnd_wk_first    ; mark that we've placed at least one word
+        jmp @ww_loop
+
+@ww_done:
+        ; ── Phase 3: centre — compute pad_left = (40 - wid) / 2 ──────────────
+        lda #40
+        sec
+        sbc rnd_wk_wid      ; A = 40 - wid (always ≥ 0)
+        lsr                 ; A = (40 - wid) / 2
+        sta @pad            ; pad_left
+        ; add pad to all x positions
+        ldx #0
+@rcl_pad:
+        cpx rnd_wk_len
+        beq @rcl_render
+        lda rnd_wk_x, x
+        clc
+        adc @pad
+        sta rnd_wk_x, x
+        inx
+        jmp @rcl_pad
+
+@rcl_render:
+        ; save zp_src (next-source-line start) — render phase overwrites it
+        lda zp_src
+        sta rnd_wk_csrc
+        lda zp_src+1
+        sta rnd_wk_csrc+1
+        ; ── Phase 4: render each char into output buffer ────────────────────
+        ldx #0
+@rcl_ch:
+        cpx rnd_wk_len
+        bne @rcl_ch_go
+        jmp @rcl_done
+@rcl_ch_go:
+        stx @chi            ; save char index
+        ; look up tile set index from screen code
+        lda rnd_wk_char, x
+        and #$7F
+        tay
+        lda tile_char_idx, y    ; set_idx (0-43)
+        ; look up tile set pointer via table
+        tay
+        lda tile_off_lo, y
+        sta zp_src
+        lda tile_off_hi, y
+        sta zp_src+1
+        ; compute output row 0 ptr: rnd_out_lo + x_pos (column = tile 0 of char)
+        ldx @chi
+        lda rnd_wk_x, x        ; x column position
+        clc
+        adc rnd_out_lo
+        sta rnd_out_lo
+        lda rnd_out_hi
+        adc #0
+        sta rnd_out_hi
+        ; write 9 tile bytes: 3 cols × 3 rows (row stride = 40)
+        ; row 0:
+        ldy #0
+        lda (zp_src), y
+        sta (rnd_out_lo), y
+        iny
+        lda (zp_src), y
+        sta (rnd_out_lo), y
+        iny
+        lda (zp_src), y
+        sta (rnd_out_lo), y
+        ; advance output ptr by 40 → row 1
+        lda rnd_out_lo
+        clc
+        adc #40
+        sta rnd_out_lo
+        bcc @ok1r
+        inc rnd_out_hi
+@ok1r:
+        ; row 1 (tile bytes 3-5):
+        ldy #3
+        lda (zp_src), y
+        ldy #0
+        sta (rnd_out_lo), y
+        ldy #4
+        lda (zp_src), y
+        ldy #1
+        sta (rnd_out_lo), y
+        ldy #5
+        lda (zp_src), y
+        ldy #2
+        sta (rnd_out_lo), y
+        ; advance output ptr by 40 → row 2
+        lda rnd_out_lo
+        clc
+        adc #40
+        sta rnd_out_lo
+        bcc @ok2r
+        inc rnd_out_hi
+@ok2r:
+        ; row 2 (tile bytes 6-8):
+        ldy #6
+        lda (zp_src), y
+        ldy #0
+        sta (rnd_out_lo), y
+        ldy #7
+        lda (zp_src), y
+        ldy #1
+        sta (rnd_out_lo), y
+        ldy #8
+        lda (zp_src), y
+        ldy #2
+        sta (rnd_out_lo), y
+        ; restore rnd_out_lo/hi to base of output buf (subtract 80)
+        sec
+        lda rnd_out_lo
+        sbc #80
+        sta rnd_out_lo
+        bcs @ok3r
+        dec rnd_out_hi
+@ok3r:
+        ; restore x offset: subtract rnd_wk_x back out
+        ldx @chi
+        sec
+        lda rnd_out_lo
+        sbc rnd_wk_x, x
+        sta rnd_out_lo
+        bcs @ok4r
+        dec rnd_out_hi
+@ok4r:
+        ; advance to next char
+        ldx @chi
+        inx
+        jmp @rcl_ch
+
+@rcl_done:
+        ; restore zp_src to start of next source line (saved before render phase)
+        lda rnd_wk_csrc
+        sta zp_src
+        lda rnd_wk_csrc+1
+        sta zp_src+1
+        rts
+
+; ---------------------------------------------------------------------------
+;  Local storage for render_compute_line (data bytes after rts, never executed)
+; ---------------------------------------------------------------------------
+@wi:        .byte 0
+@tmp_byte:  .byte 0
+@pad:       .byte 0
+@chi:       .byte 0
+
+; ---------------------------------------------------------------------------
+;  render_init
+;  Initialise render cursors and fill all 25 screen rows with large chars.
+;  Called from enter_scroll_mode before IRQ chain is installed.
+; ---------------------------------------------------------------------------
+render_init:
+        lda #0
+        sta rnd_hist_head
+        sta rnd_hist_count
+        sta rnd_hist_bot_head
+        sta rnd_hist_bot_count
+        sta rnd_top_row
+
+        lda scroll_start_lo
+        sta zp_src
+        sta rnd_top_lo
+        lda scroll_start_hi
+        sta zp_src+1
+        sta rnd_top_hi
+
+        ; Screen write destination pointer starts at SCREEN
+        lda #<SCREEN
+        sta zp_dst
+        lda #>SCREEN
+        sta zp_dst+1
+
+        ; ── Render line 0 → rnd_top_linebuf ──────────────────────────────
+        jsr @ri_render_top      ; uses zp_src, leaves next ptr in zp_src
+        lda zp_src
+        sta rnd_top_next_lo
+        lda zp_src+1
+        sta rnd_top_next_hi
+        ; copy 120 bytes from rnd_top_linebuf to screen (advances zp_dst by 120)
+        lda #<rnd_top_linebuf
+        sta zp_src
+        lda #>rnd_top_linebuf
+        sta zp_src+1
+        jsr @ri_copy120_adv
+        ; restore zp_src to next doc ptr
+        lda rnd_top_next_lo
+        sta zp_src
+        lda rnd_top_next_hi
+        sta zp_src+1
+
+        ; ── Lines 1-7: render into rnd_bot_linebuf, copy to screen ───────
+        ldx #7
+@ri_l7: stx @ri_cnt
+        jsr @ri_render_bot      ; renders to rnd_bot_linebuf, advances zp_src
+        lda zp_src
+        sta @ri_next_lo
+        lda zp_src+1
+        sta @ri_next_hi
+        lda #<rnd_bot_linebuf
+        sta zp_src
+        lda #>rnd_bot_linebuf
+        sta zp_src+1
+        jsr @ri_copy120_adv
+        lda @ri_next_lo
+        sta zp_src
+        lda @ri_next_hi
+        sta zp_src+1
+        ldx @ri_cnt
+        dex
+        bne @ri_l7
+
+        ; ── Render line 8 → rnd_bot_linebuf (final bot position) ─────────
+        lda zp_src
+        sta rnd_bot_lo
+        lda zp_src+1
+        sta rnd_bot_hi
+        jsr @ri_render_bot
+        lda zp_src
+        sta rnd_bot_next_lo
+        lda zp_src+1
+        sta rnd_bot_next_hi
+        ; copy only 1 row (40 bytes) from rnd_bot_linebuf to screen row 24
+        lda #<rnd_bot_linebuf
+        sta zp_src
+        lda #>rnd_bot_linebuf
+        sta zp_src+1
+        ldy #0
+@ri_c40:
+        lda (zp_src), y
+        sta (zp_dst), y
+        iny
+        cpy #COLS
+        bne @ri_c40
+
+        lda #1
+        sta rnd_bot_row
+        rts
+
+        ; helper: render from zp_src into rnd_top_linebuf (zp_dst is saved/restored)
+@ri_render_top:
+        lda zp_dst
+        sta @ri_dst_save
+        lda zp_dst+1
+        sta @ri_dst_save+1
+        lda #<rnd_top_linebuf
+        sta zp_dst
+        lda #>rnd_top_linebuf
+        sta zp_dst+1
+        jsr render_compute_line
+        lda @ri_dst_save
+        sta zp_dst
+        lda @ri_dst_save+1
+        sta zp_dst+1
+        rts
+
+        ; helper: render from zp_src into rnd_bot_linebuf (zp_dst saved/restored)
+@ri_render_bot:
+        lda zp_dst
+        sta @ri_dst_save
+        lda zp_dst+1
+        sta @ri_dst_save+1
+        lda #<rnd_bot_linebuf
+        sta zp_dst
+        lda #>rnd_bot_linebuf
+        sta zp_dst+1
+        jsr render_compute_line
+        lda @ri_dst_save
+        sta zp_dst
+        lda @ri_dst_save+1
+        sta zp_dst+1
+        rts
+
+        ; helper: copy 120 bytes from (zp_src) to (zp_dst), advance zp_dst by 120
+@ri_copy120_adv:
+        ldy #0
+@rc120: lda (zp_src), y
+        sta (zp_dst), y
+        iny
+        cpy #120
+        bne @rc120
+        lda zp_dst
+        clc
+        adc #120
+        sta zp_dst
+        bcc @rc120_ok
+        inc zp_dst+1
+@rc120_ok:
+        rts
+
+@ri_cnt:      .byte 0
+@ri_next_lo:  .byte 0
+@ri_next_hi:  .byte 0
+@ri_dst_save: .byte 0, 0
+
+; ---------------------------------------------------------------------------
+;  render_advance_top — advance top cursor one tile row forward
+; ---------------------------------------------------------------------------
+render_advance_top:
+        inc rnd_top_row
+        lda rnd_top_row
+        cmp #3
+        bne @rat_done
+        ; push old rnd_top_lo/hi to top history ring
+        ldx rnd_hist_head
+        lda rnd_top_lo
+        sta rnd_hist_lo, x
+        lda rnd_top_hi
+        sta rnd_hist_hi, x
+        inx
+        cpx #30
+        bne @rat_nw
+        ldx #0
+@rat_nw:
+        stx rnd_hist_head
+        lda rnd_hist_count
+        cmp #30
+        beq @rat_full
+        inc rnd_hist_count
+@rat_full:
+        ; advance top ptr to next rendered line
+        lda rnd_top_next_lo
+        sta rnd_top_lo
+        lda rnd_top_next_hi
+        sta rnd_top_hi
+        ; render new top line
+        lda rnd_top_lo
+        sta zp_src
+        lda rnd_top_hi
+        sta zp_src+1
+        lda #<rnd_top_linebuf
+        sta zp_dst
+        lda #>rnd_top_linebuf
+        sta zp_dst+1
+        jsr render_compute_line
+        lda zp_src
+        sta rnd_top_next_lo
+        lda zp_src+1
+        sta rnd_top_next_hi
+        lda #0
+        sta rnd_top_row
+@rat_done:
+        rts
+
+; ---------------------------------------------------------------------------
+;  render_advance_bot — advance bot cursor one tile row forward
+; ---------------------------------------------------------------------------
+render_advance_bot:
+        inc rnd_bot_row
+        lda rnd_bot_row
+        cmp #3
+        bne @rab_done
+        ldx rnd_hist_bot_head
+        lda rnd_bot_lo
+        sta rnd_hist_bot_lo, x
+        lda rnd_bot_hi
+        sta rnd_hist_bot_hi, x
+        inx
+        cpx #30
+        bne @rab_nw
+        ldx #0
+@rab_nw:
+        stx rnd_hist_bot_head
+        lda rnd_hist_bot_count
+        cmp #30
+        beq @rab_full
+        inc rnd_hist_bot_count
+@rab_full:
+        lda rnd_bot_next_lo
+        sta rnd_bot_lo
+        lda rnd_bot_next_hi
+        sta rnd_bot_hi
+        lda rnd_bot_lo
+        sta zp_src
+        lda rnd_bot_hi
+        sta zp_src+1
+        lda #<rnd_bot_linebuf
+        sta zp_dst
+        lda #>rnd_bot_linebuf
+        sta zp_dst+1
+        jsr render_compute_line
+        lda zp_src
+        sta rnd_bot_next_lo
+        lda zp_src+1
+        sta rnd_bot_next_hi
+        lda #0
+        sta rnd_bot_row
+@rab_done:
+        rts
+
+; ---------------------------------------------------------------------------
+;  render_retreat_top — move top cursor back one tile row
+; ---------------------------------------------------------------------------
+render_retreat_top:
+        dec rnd_top_row
+        bpl @rrt_done
+        ; underflowed: was 0, now $FF
+        lda rnd_hist_count
+        beq @rrt_clamp      ; at document start, clamp to 0
+        ; save current rnd_top_lo/hi as new next ptr
+        lda rnd_top_lo
+        sta rnd_top_next_lo
+        lda rnd_top_hi
+        sta rnd_top_next_hi
+        ; pop from ring: head = (head-1+30) mod 30
+        lda rnd_hist_head
+        beq @rrt_wrap_h
+        dec rnd_hist_head
+        jmp @rrt_got_h
+@rrt_wrap_h:
+        lda #29
+        sta rnd_hist_head
+@rrt_got_h:
+        dec rnd_hist_count
+        ldx rnd_hist_head
+        lda rnd_hist_lo, x
+        sta rnd_top_lo
+        lda rnd_hist_hi, x
+        sta rnd_top_hi
+        ; re-render this line into rnd_top_linebuf
+        lda rnd_top_lo
+        sta zp_src
+        lda rnd_top_hi
+        sta zp_src+1
+        lda #<rnd_top_linebuf
+        sta zp_dst
+        lda #>rnd_top_linebuf
+        sta zp_dst+1
+        jsr render_compute_line
+        lda zp_src
+        sta rnd_top_next_lo
+        lda zp_src+1
+        sta rnd_top_next_hi
+        lda #2
+        sta rnd_top_row
+        rts
+@rrt_clamp:
+        lda #0
+        sta rnd_top_row
+@rrt_done:
+        rts
+
+; ---------------------------------------------------------------------------
+;  render_retreat_bot — move bot cursor back one tile row
+; ---------------------------------------------------------------------------
+render_retreat_bot:
+        dec rnd_bot_row
+        bpl @rrb_done
+        lda rnd_hist_bot_count
+        beq @rrb_clamp
+        lda rnd_bot_lo
+        sta rnd_bot_next_lo
+        lda rnd_bot_hi
+        sta rnd_bot_next_hi
+        lda rnd_hist_bot_head
+        beq @rrb_wrap_h
+        dec rnd_hist_bot_head
+        jmp @rrb_got_h
+@rrb_wrap_h:
+        lda #29
+        sta rnd_hist_bot_head
+@rrb_got_h:
+        dec rnd_hist_bot_count
+        ldx rnd_hist_bot_head
+        lda rnd_hist_bot_lo, x
+        sta rnd_bot_lo
+        lda rnd_hist_bot_hi, x
+        sta rnd_bot_hi
+        lda rnd_bot_lo
+        sta zp_src
+        lda rnd_bot_hi
+        sta zp_src+1
+        lda #<rnd_bot_linebuf
+        sta zp_dst
+        lda #>rnd_bot_linebuf
+        sta zp_dst+1
+        jsr render_compute_line
+        lda zp_src
+        sta rnd_bot_next_lo
+        lda zp_src+1
+        sta rnd_bot_next_hi
+        lda #2
+        sta rnd_bot_row
+        rts
+@rrb_clamp:
+        lda #0
+        sta rnd_bot_row
+@rrb_done:
+        rts
+
 ; ---------------------------------------------------------------------------
 ;  Velocity lookup table — computed at startup by build_velocity_table
 ;  10 entries (steps 0-9), 8.8 fixed-point format
@@ -2677,6 +3325,148 @@ text_data:
 text_data_end:
 
 ; =============================================================================
+;  Render engine RODATA
+;  tile_char_idx[128] — maps C64 screen codes $00-$7F to tile set index (0-43)
+;  Screen codes: A-Z=$01-$1A, space=$20, 0-9=$30-$39
+;  Punctuation: ,=$2C .=$2E !=$21 ?=$3F -=$2D :=$3A '=$27
+; =============================================================================
+tile_char_idx:
+;       $x0 $x1 $x2 $x3 $x4 $x5 $x6 $x7 $x8 $x9 $xA $xB $xC $xD $xE $xF
+.byte     0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15  ; $00-$0F (A-P)
+.byte    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,  0,  0,  0,  0,  0  ; $10-$1F (Q-Z)
+.byte     0, 39,  0,  0,  0,  0,  0, 43,  0,  0,  0,  0, 37, 41, 38,  0  ; $20-$2F (sp,!,',-,.,)
+.byte    27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 42,  0,  0,  0,  0, 40  ; $30-$3F (0-9,:=3A,?=3F)
+.byte     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0  ; $40-$4F
+.byte     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0  ; $50-$5F
+.byte     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0  ; $60-$6F
+.byte     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0  ; $70-$7F
+
+; =============================================================================
+;  tile_sets[44][9] — 9 tile indices (top-l,top-c,top-r,mid-l,mid-c,mid-r,
+;                                      bot-l,bot-c,bot-r) per character
+;  Tile index vocabulary:
+;   0=blank  1=top-left  2=top-ctr  3=top-right
+;   4=left-vert  5=right-vert  6=bot-left  7=bot-ctr  8=bot-right
+;   9=hmid-left  10=hmid-ctr  11=hmid-right  12=full  13=ctr-vert  14=ctr-dot
+; =============================================================================
+tile_sets:
+; Set 0  (blank)
+.byte  0, 0, 0,  0, 0, 0,  0, 0, 0
+; Set 1  A: top frame + midbar + open legs
+.byte  1, 2, 3,  9,10,11,  4, 0, 5
+; Set 2  B: top frame + mid-bump-right + bot frame
+.byte  1, 2, 3,  9,10,11,  6, 7, 8
+; Set 3  C: top bar open-right + left vert + bot bar open-right
+.byte  1, 2, 0,  4, 0, 0,  6, 7, 0
+; Set 4  D: frame (same shape as O for block font)
+.byte  1, 2, 3,  4, 0, 5,  6, 7, 8
+; Set 5  E: top bar + mid bar left + bot bar
+.byte  1, 2, 2,  9,10, 0,  6, 7, 7
+; Set 6  F: top bar + mid bar left + left vert
+.byte  1, 2, 2,  9,10, 0,  4, 0, 0
+; Set 7  G: C + right stub at mid
+.byte  1, 2, 0,  4, 0,11,  6, 7, 8
+; Set 8  H: two verts + midbar
+.byte  1, 0, 3,  9,10,11,  6, 0, 8
+; Set 9  I: centered (center col only)
+.byte  0, 2, 0,  0,13, 0,  0, 7, 0
+; Set 10 J: top right + right vert + bot frame
+.byte  0, 2, 3,  0, 0, 5,  6, 7, 8
+; Set 11 K: left vert + upper-right + mid bar + lower-right
+.byte  1, 0, 3,  9,10, 0,  6, 0, 8
+; Set 12 L: left vert + bot bar
+.byte 16, 0, 0,  4, 0, 0,  6, 7, 7
+; Set 13 M: solid top two rows + open legs
+.byte  1,12, 3,  4,12, 5,  4, 0, 5
+; Set 14 N: corner tops + solid mid + open legs
+.byte  1, 0, 3,  4,12, 5,  4, 0, 5
+; Set 15 O: frame
+.byte  1, 2, 3,  4, 0, 5,  6, 7, 8
+; Set 16 P: top frame + mid-right-close + left vert
+.byte  1, 2, 3,  9,10,15,  4, 0, 0
+; Set 17 Q: frame + bottom-right solid mark
+.byte  1, 2, 3,  4, 0, 5,  6, 7,12
+; Set 18 R: top frame + mid-right-close + right arm
+.byte  1, 2, 3,  9,10,11,  4, 0, 5
+; Set 19 S: top-left + midbar + bot-right
+.byte  1, 2, 2,  9,10,11,  7, 7, 8
+; Set 20 T: top bar + center stem
+.byte  2, 2, 2,  0,13, 0,  0,13, 0
+; Set 21 U: open top + bot frame
+.byte 16, 0,17,  4, 0, 5,  6, 7, 8
+; Set 22 V: verts narrowing to center bot
+.byte 16, 0,17,  6, 0, 8,  0, 7, 0
+; Set 23 W: verts + solid mid + bot frame
+.byte 16, 0,17,  4,12, 5,  6, 7, 8
+; Set 24 X: four corners + solid mid
+.byte  1, 0, 3,  0,12, 0,  6, 0, 8
+; Set 25 Y: two top verts merge + center stem
+.byte  1, 0, 3,  0,12, 0,  0,13, 0
+; Set 26 Z: top bar + solid mid + bot bar
+.byte  2, 2, 3,  0,12, 0,  6, 7, 7
+; Set 27 0: frame
+.byte  1, 2, 3,  4, 0, 5,  6, 7, 8
+; Set 28 1: center col with bot bar
+.byte  0, 1, 0,  0, 4, 0,  7, 7, 7
+; Set 29 2: top-right + mid-right + bot-left
+.byte  1, 2, 3,  0,10,11,  6, 7, 7
+; Set 30 3: right-side only open on left
+.byte  0, 2, 3,  0,10,11,  0, 7, 8
+; Set 31 4: verts + midbar + right leg
+.byte 16, 0,17,  9,10,11,  0, 0, 5
+; Set 32 5: top-left + mid + bot-right
+.byte  1, 2, 2,  9,10,11,  0, 7, 8
+; Set 33 6: C + midbar + bot frame
+.byte  1, 2, 2,  9,10,11,  6, 7, 8
+; Set 34 7: top bar + right descent
+.byte  2, 2, 3,  0, 0, 5,  0, 0, 5
+; Set 35 8: frame + midbar (= H with closed sides)
+.byte  1, 2, 3,  9,10,11,  6, 7, 8
+; Set 36 9: top frame + mid + bot-right
+.byte  1, 2, 3,  9,10,11,  0, 7, 8
+; Set 37 ,: dot at bot-left
+.byte  0, 0, 0,  0, 0, 0,  6, 0, 0
+; Set 38 .: dot at bot-center
+.byte  0, 0, 0,  0, 0, 0,  0,14, 0
+; Set 39 !: center vert + bot dot
+.byte  0,13, 0,  0,13, 0,  0,14, 0
+; Set 40 ?: top-right curve + mid + bot dot
+.byte  0, 2, 3,  0,10, 0,  0,14, 0
+; Set 41 -: center midbar
+.byte  0, 0, 0,  0,10, 0,  0, 0, 0
+; Set 42 :: two dots
+.byte  0,14, 0,  0, 0, 0,  0,14, 0
+; Set 43 ': apostrophe at top-center
+.byte  0,14, 0,  0, 0, 0,  0, 0, 0
+
+; Precomputed pointers into tile_sets (lo and hi bytes)
+tile_off_lo:
+.byte <(tile_sets +  0*9), <(tile_sets +  1*9), <(tile_sets +  2*9), <(tile_sets +  3*9)
+.byte <(tile_sets +  4*9), <(tile_sets +  5*9), <(tile_sets +  6*9), <(tile_sets +  7*9)
+.byte <(tile_sets +  8*9), <(tile_sets +  9*9), <(tile_sets + 10*9), <(tile_sets + 11*9)
+.byte <(tile_sets + 12*9), <(tile_sets + 13*9), <(tile_sets + 14*9), <(tile_sets + 15*9)
+.byte <(tile_sets + 16*9), <(tile_sets + 17*9), <(tile_sets + 18*9), <(tile_sets + 19*9)
+.byte <(tile_sets + 20*9), <(tile_sets + 21*9), <(tile_sets + 22*9), <(tile_sets + 23*9)
+.byte <(tile_sets + 24*9), <(tile_sets + 25*9), <(tile_sets + 26*9), <(tile_sets + 27*9)
+.byte <(tile_sets + 28*9), <(tile_sets + 29*9), <(tile_sets + 30*9), <(tile_sets + 31*9)
+.byte <(tile_sets + 32*9), <(tile_sets + 33*9), <(tile_sets + 34*9), <(tile_sets + 35*9)
+.byte <(tile_sets + 36*9), <(tile_sets + 37*9), <(tile_sets + 38*9), <(tile_sets + 39*9)
+.byte <(tile_sets + 40*9), <(tile_sets + 41*9), <(tile_sets + 42*9), <(tile_sets + 43*9)
+
+tile_off_hi:
+.byte >(tile_sets +  0*9), >(tile_sets +  1*9), >(tile_sets +  2*9), >(tile_sets +  3*9)
+.byte >(tile_sets +  4*9), >(tile_sets +  5*9), >(tile_sets +  6*9), >(tile_sets +  7*9)
+.byte >(tile_sets +  8*9), >(tile_sets +  9*9), >(tile_sets + 10*9), >(tile_sets + 11*9)
+.byte >(tile_sets + 12*9), >(tile_sets + 13*9), >(tile_sets + 14*9), >(tile_sets + 15*9)
+.byte >(tile_sets + 16*9), >(tile_sets + 17*9), >(tile_sets + 18*9), >(tile_sets + 19*9)
+.byte >(tile_sets + 20*9), >(tile_sets + 21*9), >(tile_sets + 22*9), >(tile_sets + 23*9)
+.byte >(tile_sets + 24*9), >(tile_sets + 25*9), >(tile_sets + 26*9), >(tile_sets + 27*9)
+.byte >(tile_sets + 28*9), >(tile_sets + 29*9), >(tile_sets + 30*9), >(tile_sets + 31*9)
+.byte >(tile_sets + 32*9), >(tile_sets + 33*9), >(tile_sets + 34*9), >(tile_sets + 35*9)
+.byte >(tile_sets + 36*9), >(tile_sets + 37*9), >(tile_sets + 38*9), >(tile_sets + 39*9)
+.byte >(tile_sets + 40*9), >(tile_sets + 41*9), >(tile_sets + 42*9), >(tile_sets + 43*9)
+
+; =============================================================================
 ;  Sprite data at $3000 — dedicated SPRITES segment
 ;  Right-pointing (►) for left side, Left-pointing (◄) for right side
 ;  Each sprite: 24×21 pixels = 63 bytes + 1 pad = 64 bytes
@@ -2710,16 +3500,16 @@ spr_right_tri:  ; at $3000
         .byte $00                   ; Pad to 64 bytes
 
 spr_left_tri:   ; at $3040
-        .byte $00,$00,$01           ; Row 0:                        *
-        .byte $00,$00,$03           ; Row 1:                       **
-        .byte $00,$00,$07           ; Row 2:                      ***
-        .byte $00,$00,$0F           ; Row 3:                     ****
-        .byte $00,$00,$1F           ; Row 4:                    *****
-        .byte $00,$00,$3F           ; Row 5:                   ******
-        .byte $00,$00,$7F           ; Row 6:                  *******
-        .byte $00,$00,$FF           ; Row 7:                 ********
-        .byte $00,$01,$FF           ; Row 8:                *********
-        .byte $00,$03,$FF           ; Row 9:               **********
+        .byte $00,$00,$01           ; Row 0:                         *
+        .byte $00,$00,$03           ; Row 1:                        **
+        .byte $00,$00,$07           ; Row 2:                       ***
+        .byte $00,$00,$0F           ; Row 3:                      ****
+        .byte $00,$00,$1F           ; Row 4:                     *****
+        .byte $00,$00,$3F           ; Row 5:                    ******
+        .byte $00,$00,$7F           ; Row 6:                   *******
+        .byte $00,$00,$FF           ; Row 7:                  ********
+        .byte $00,$01,$FF           ; Row 8:                 *********
+        .byte $00,$03,$FF           ; Row 9:                **********
         .byte $00,$07,$FF           ; Row 10:              *********** (widest)
         .byte $00,$03,$FF           ; Row 11:               **********
         .byte $00,$01,$FF           ; Row 12:                *********
@@ -2734,9 +3524,116 @@ spr_left_tri:   ; at $3040
         .byte $00                   ; Pad to 64 bytes
 
 ; =============================================================================
+;  Custom charset at $2800 — 256 tiles × 8 bytes = 2048 bytes
+;  Tile index vocabulary (used by tile_sets above):
+;   0  blank      1  top-left    2  top-ctr    3  top-right
+;   4  left-vert  5  right-vert  6  bot-left   7  bot-ctr    8  bot-right
+;   9  hmid-left  10 hmid-ctr   11 hmid-right  12 full-blk
+;  13  ctr-vert   14 ctr-dot
+;
+;  Padding: 1px margin on all four sides of each glyph.
+;  Horizontal values: $70=01110000 (left 3px, 1px L-margin)
+;                     $0E=00001110 (right 3px, 1px R-margin)
+;                     $7E=01111110 (full bar, 1px L+R margins)
+;                     $38=00111000 (centre 3px)
+;  Vertical: top-tiles have row 0 blank (1px top gap);
+;            bot-tiles have row 7 blank (1px bottom gap).
+;            Mid-tiles carry strokes through all 8 rows (no inner gap).
+; =============================================================================
+.segment "CHARSET"
+
+; T0 — blank
+.byte $00,$00,$00,$00,$00,$00,$00,$00
+
+; T1 — top-left corner  (1px top pad, 3-row top bar, 4-row left vert)
+.byte $00,$7E,$7E,$7E,$70,$70,$70,$70
+
+; T2 — top-center  (1px top pad, 3-row top bar, blank below)
+.byte $00,$7E,$7E,$7E,$00,$00,$00,$00
+
+; T3 — top-right corner  (1px top pad, 3-row top bar, 4-row right vert)
+.byte $00,$7E,$7E,$7E,$0E,$0E,$0E,$0E
+
+; T4 — left vertical  (left 3px with 1px L-margin, full 8 rows)
+.byte $70,$70,$70,$70,$70,$70,$70,$70
+
+; T5 — right vertical  (right 3px with 1px R-margin, full 8 rows)
+.byte $0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E
+
+; T6 — bot-left corner  (5-row left vert, 3-row bot bar flush to edge)
+.byte $70,$70,$70,$70,$70,$7E,$7E,$7E
+
+; T7 — bot-center  (5-row blank, 3-row bot bar flush to edge)
+.byte $00,$00,$00,$00,$00,$7E,$7E,$7E
+
+; T8 — bot-right corner  (5-row right vert, 3-row bot bar flush to edge)
+.byte $0E,$0E,$0E,$0E,$0E,$7E,$7E,$7E
+
+; T9 — hmid-left  (left vert rows 0-1, full midbar rows 2-4, left vert rows 5-7)
+.byte $70,$70,$7E,$7E,$7E,$70,$70,$70
+
+; T10 — hmid-center  (blank rows 0-1, full midbar rows 2-4, blank rows 5-7)
+.byte $00,$00,$7E,$7E,$7E,$00,$00,$00
+
+; T11 — hmid-right  (right vert rows 0-1, full midbar rows 2-4, right vert rows 5-7)
+.byte $0E,$0E,$7E,$7E,$7E,$0E,$0E,$0E
+
+; T12 — full block  (full bar with 1px L+R margins, all 8 rows)
+.byte $7E,$7E,$7E,$7E,$7E,$7E,$7E,$7E
+
+; T13 — center vertical  (centre 3px $38=00111000, full 8 rows)
+.byte $38,$38,$38,$38,$38,$38,$38,$38
+
+; T14 — center dot  (centre 3px, rows 4-6, 1px bot pad)
+.byte $00,$00,$00,$00,$38,$38,$38,$00
+
+; T15 — mid-close-right (right vert rows 0-1, bar rows 2-4, blank rows 5-7)
+;        used in mid-row right of P where nothing continues below
+.byte $0E,$0E,$7E,$7E,$7E,$00,$00,$00
+
+; T16 — top-left-vert (1px top gap, then left vert — matches top-gap of T1/T2/T3)
+.byte $00,$70,$70,$70,$70,$70,$70,$70
+
+; T17 — top-right-vert (1px top gap, then right vert — matches top-gap of T1/T2/T3)
+.byte $00,$0E,$0E,$0E,$0E,$0E,$0E,$0E
+
+; T18-T255 zero-filled to reach 256 tiles
+.res (256-18)*8, 0
+
+; =============================================================================
 ;  BSS segment — runtime-only document buffer (not stored in PRG file)
 ; =============================================================================
 .segment "BSS"
 
 save_header:    .res 1              ; total_pages (saved to disk as first byte)
 doc_buffer:     .res 9600           ; 10 pages × 960 bytes (24 rows × 40 cols)
+
+; ---------------------------------------------------------------------------
+;  Render engine state — large-character scroll mode
+; ---------------------------------------------------------------------------
+rnd_top_linebuf: .res 120           ; 3 tile rows × 40 cols for current top rendered line
+rnd_bot_linebuf: .res 120           ; 3 tile rows × 40 cols for current bottom rendered line
+rnd_hist_lo:    .res 30             ; top history ring: lo byte of doc ptr at line starts
+rnd_hist_hi:    .res 30             ; top history ring: hi byte
+rnd_hist_head:  .res 1              ; top ring write index (0-29)
+rnd_hist_count: .res 1              ; top ring valid entries (0-30)
+rnd_hist_bot_lo:  .res 30           ; bot history ring: lo byte
+rnd_hist_bot_hi:  .res 30           ; bot history ring: hi byte
+rnd_hist_bot_head:.res 1            ; bot ring write index
+rnd_hist_bot_count:.res 1           ; bot ring valid entries
+
+; Word-wrap temporaries (used only inside render_compute_line)
+rnd_wk_char:    .res 13             ; screen codes of chars on current rendered line
+rnd_wk_x:       .res 13             ; x tile-positions of each char (after centering)
+rnd_wk_len:     .res 1              ; number of chars on line (0-13)
+rnd_wk_wid:     .res 1              ; running rendered width (tile columns)
+rnd_wk_wlen:    .res 1              ; current word length (chars)
+rnd_wk_wwidth:  .res 1              ; current word width (tile columns = wlen*3)
+rnd_wk_sep:     .res 1              ; separator to add before this word (0 or 1)
+rnd_wk_first:   .res 1              ; 0=first word on line not yet placed, 1=already placed one
+
+; Pointers to start of rendered line AFTER current top/bot linebuf
+rnd_top_next_lo: .res 1            ; doc ptr lo of rendered line after current top linebuf
+rnd_top_next_hi: .res 1
+rnd_bot_next_lo: .res 1            ; doc ptr lo of rendered line after current bot linebuf
+rnd_bot_next_hi: .res 1
