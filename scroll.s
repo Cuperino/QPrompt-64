@@ -1101,6 +1101,15 @@ scroll_screen_down:
         dec rows_from_start_hi
 @ssd_dec_lo:
         dec rows_from_start_lo
+        ; Record whether the top retreat will clamp (rnd_top_row=0 AND hist
+        ; empty).  Must be checked before the retreat because both the clamped
+        ; path and a normal dec-to-0 path leave identical state afterwards.
+        ; When clamped we are reversing into the blank region — row 0 must be
+        ; filled with $00, not with the stale linebuf content (line 0).
+        lda rnd_top_row
+        ora rnd_hist_count          ; 0 only if both are 0 (will clamp)
+        sta ssd_fill_blank          ; 0 → clamped (fill blank), nonzero → ok
+
         jsr render_retreat_top
         jsr render_retreat_bot
 
@@ -1153,6 +1162,17 @@ scroll_screen_down:
 
         ; Fill row 0 immediately after page 0 (before beam reaches raster 51)
         ldy #0
+        lda ssd_fill_blank
+        bne @ssd_fill_linebuf       ; nonzero → not clamped, use linebuf
+        ; Clamped: reversing into blank region — fill with $00 (blank tile)
+@ssd_fill_blank_loop:
+        lda #$00
+        sta SCREEN, y
+        iny
+        cpy #COLS
+        bne @ssd_fill_blank_loop
+        jmp @ssd_color_top
+@ssd_fill_linebuf:
 @fill_top:
         lda (zp_src), y
         sta SCREEN, y
@@ -1160,6 +1180,7 @@ scroll_screen_down:
         cpy #COLS
         bne @fill_top
 
+@ssd_color_top:
         ; Colour for new top row = white
         lda #$0F
         ldy #0
@@ -3718,3 +3739,4 @@ rnd_bot_next_hi: .res 1
 rnd_top_skip:    .res 1            ; blank-tile rollover skip count (counts down from 4 at init)
 rows_from_start_lo: .res 1        ; 16-bit coarse-row distance from starting position (lo)
 rows_from_start_hi: .res 1        ;   (hi) — clamped at 0, prevents reverse past doc start
+ssd_fill_blank:  .res 1           ; non-zero → top retreat clamped, fill row 0 with blank
