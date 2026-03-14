@@ -973,6 +973,19 @@ irq_handler:
         lda fine_scroll
         cmp #8
         bcc @s2_rev_next
+        ; fine_scroll overflowed — check if at starting position
+        lda rows_from_start_lo
+        bne @s2_do_coarse
+        lda rows_from_start_hi
+        bne @s2_do_coarse
+        ; At start: clamp, snap fine_scroll to 7, zero velocity
+        lda #7
+        sta fine_scroll
+        lda #0
+        sta current_step
+        sta scroll_accum
+        jmp @s2_update_vic
+@s2_do_coarse:
         lda #0
         sta fine_scroll
         inc do_coarse_down
@@ -1055,6 +1068,10 @@ scroll_screen_up:
 
         jsr render_advance_bot
         jsr render_advance_top
+        inc rows_from_start_lo
+        bne @ssu_done
+        inc rows_from_start_hi
+@ssu_done:
         rts
 
 
@@ -1063,6 +1080,27 @@ scroll_screen_up:
 ; text data from text_ptr - 25*COLS.  Decrements text_ptr with wrapping.
 ; ---------------------------------------------------------------------------
 scroll_screen_down:
+        ; Boundary check: if already at the starting position, snap fine
+        ; scroll to 7, zero velocity, and return without moving.
+        lda rows_from_start_lo
+        bne @ssd_ok
+        lda rows_from_start_hi
+        bne @ssd_ok
+        lda #7
+        sta fine_scroll
+        ora #%00010000              ; DEN | YSCROLL=7
+        sta VIC_CTRL1
+        lda #0
+        sta current_step
+        sta scroll_accum
+        rts
+@ssd_ok:
+        ; Decrement rows_from_start (already know it's > 0)
+        lda rows_from_start_lo
+        bne @ssd_dec_lo
+        dec rows_from_start_hi
+@ssd_dec_lo:
+        dec rows_from_start_lo
         jsr render_retreat_top
         jsr render_retreat_bot
 
@@ -2753,6 +2791,9 @@ render_init:
         sta rnd_top_row
         lda #4
         sta rnd_top_skip
+        lda #0
+        sta rows_from_start_lo
+        sta rows_from_start_hi
 
         lda scroll_start_lo
         sta zp_src
@@ -3675,3 +3716,5 @@ rnd_top_next_hi: .res 1
 rnd_bot_next_lo: .res 1            ; doc ptr lo of rendered line after current bot linebuf
 rnd_bot_next_hi: .res 1
 rnd_top_skip:    .res 1            ; blank-tile rollover skip count (counts down from 4 at init)
+rows_from_start_lo: .res 1        ; 16-bit coarse-row distance from starting position (lo)
+rows_from_start_hi: .res 1        ;   (hi) — clamped at 0, prevents reverse past doc start
