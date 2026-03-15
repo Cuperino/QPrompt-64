@@ -1017,6 +1017,9 @@ irq_handler:
 
 ; ---- Coarse scroll ----------------------------------------------------------
 scroll_screen_up:
+        ; --- Direction guard: cancel stale forward scrolls if now reversing ---
+        lda direction
+        bmi @ssu_cancel
         ; --- Forward limit check: rows_from_start >= max_rows_fwd? ---
         lda rows_from_start_hi
         cmp max_rows_fwd_hi
@@ -1036,6 +1039,10 @@ scroll_screen_up:
         sta VIC_CTRL1
         lda #1
         sta fwd_limit_reached
+        rts
+@ssu_cancel:
+        lda #0
+        sta do_coarse
         rts
 @ssu_ok:
         lda #0
@@ -3217,8 +3224,33 @@ render_retreat_top:
         sta rnd_top_row
         rts
 @rrt_clamp:
-        lda #0
+        ; Re-entering blank region above content: restore skip counter,
+        ; reset doc pointers to document start, and clear the linebuf so
+        ; that stale content from a prematurely rendered line 0 doesn't
+        ; appear as duplicate text in the blank area.
+        lda rnd_top_skip
+        cmp #4
+        beq @rrt_skip_ok
+        inc rnd_top_skip
+@rrt_skip_ok:
+        lda #2                      ; retreat to tile row 2 of previous blank line
         sta rnd_top_row
+        ; Reset doc pointers so the next skip-reaching-0 render produces line 0
+        lda scroll_start_lo
+        sta rnd_top_lo
+        sta rnd_top_next_lo
+        lda scroll_start_hi
+        sta rnd_top_hi
+        sta rnd_top_next_hi
+        ; Clear linebuf (blank tile-line)
+        lda #0
+        ldy #0
+@rrt_clr:
+        sta rnd_top_linebuf, y
+        iny
+        cpy #120
+        bne @rrt_clr
+        rts
 @rrt_done:
         rts
 
