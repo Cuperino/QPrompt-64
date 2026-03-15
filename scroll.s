@@ -330,11 +330,13 @@ enter_scroll_mode:
 clear_screen:
         lda #$20                    ; space screen code
         ldx #0
-@cs1:   sta SCREEN, x
+@cs1:   .repeat 8
+        sta SCREEN, x
         sta SCREEN+256, x
         sta SCREEN+512, x
         sta SCREEN+744, x
         inx
+        .endrepeat
         bne @cs1
 
         ; Colour RAM: rows 0-8 = white (bytes 0-359)
@@ -345,45 +347,57 @@ clear_screen:
         ; Bytes 0-255: rows 0-6 (all white)
         lda #WHITE
         ldx #0
-@cr0:   sta COLRAM, x
+@cr0:   .repeat 8
+        sta COLRAM, x
         inx
+        .endrepeat
         bne @cr0
 
         ; Bytes 256-359: rows 7-8 (still white)
         lda #WHITE
         ldx #0
-@cr1a:  sta COLRAM+256, x
+@cr1a:  .repeat 8
+        sta COLRAM+256, x
         inx
+        .endrepeat
         cpx #104
         bne @cr1a
 
         ; Bytes 360-511: rows 9-12 (light gray)
         lda #LIGHT_GRAY
         ldx #104
-@cr1b:  sta COLRAM+256, x
+@cr1b:  .repeat 8
+        sta COLRAM+256, x
         inx
+        .endrepeat
         bne @cr1b
 
         ; Bytes 512-639: rows 12-15 (light gray)
         lda #LIGHT_GRAY
         ldx #0
-@cr2a:  sta COLRAM+512, x
+@cr2a:  .repeat 8
+        sta COLRAM+512, x
         inx
+        .endrepeat
         cpx #128
         bne @cr2a
 
         ; Bytes 640-767: rows 16-19 (white)
         lda #WHITE
         ldx #128
-@cr2b:  sta COLRAM+512, x
+@cr2b:  .repeat 8
+        sta COLRAM+512, x
         inx
+        .endrepeat
         bne @cr2b
 
         ; Page 3: COLRAM+768..1023 (rows 19-24, 24 extra bytes harmless)
         lda #WHITE
         ldx #0
-@cr3:   sta COLRAM+768, x
+@cr3:   .repeat 8
+        sta COLRAM+768, x
         inx
+        .endrepeat
         bne @cr3
 
         rts
@@ -608,11 +622,13 @@ config_screen:
         ; Clear screen
         lda #$20
         ldx #0
-@dcs:   sta SCREEN, x
+@dcs:   .repeat 8
+        sta SCREEN, x
         sta SCREEN+256, x
         sta SCREEN+512, x
         sta SCREEN+744, x
         inx
+        .endrepeat
         bne @dcs
 
         ; Row 2: "BASE SPEED:"
@@ -690,11 +706,13 @@ config_screen:
         ; Set all color RAM to white
         lda #WHITE
         ldx #0
-@ccr:   sta COLRAM, x
+@ccr:   .repeat 8
+        sta COLRAM, x
         sta COLRAM+256, x
         sta COLRAM+512, x
         sta COLRAM+768, x
         inx
+        .endrepeat
         bne @ccr
         rts
 
@@ -1590,34 +1608,42 @@ enter_editor:
         lda #$20
         ldx #0
 @ee_cls:
+        .repeat 8
         sta SCREEN, x
         sta SCREEN+256, x
         sta SCREEN+512, x
         sta SCREEN+744, x
         inx
+        .endrepeat
         bne @ee_cls
 
         ; Set color RAM rows 0-23 = WHITE
         lda #WHITE
         ldx #0
 @ee_cr0:
+        .repeat 8
         sta COLRAM, x
         sta COLRAM+256, x
         sta COLRAM+512, x
         inx
+        .endrepeat
         bne @ee_cr0
         ; Remaining row 24 area in page 3 = LIGHT_BLUE
         ldx #0
 @ee_cr3:
+        .repeat 8
         sta COLRAM+768, x
         inx
+        .endrepeat
         cpx #192                    ; rows 19-23 (white)
         bne @ee_cr3
         lda #LIGHT_BLUE
         ldx #192
 @ee_cr4:
+        .repeat 8
         sta COLRAM+768, x          ; row 24 = light blue
         inx
+        .endrepeat
         bne @ee_cr4
 
         ; Load current page
@@ -2366,15 +2392,19 @@ do_ctrl_clr:
         lda #$20
         ldx #0
 @dcc_loop:
+        .repeat 8
         sta SCREEN, x
         sta SCREEN+256, x
         sta SCREEN+512, x
         inx
+        .endrepeat
         bne @dcc_loop
         ldx #0
 @dcc_tail:
+        .repeat 8
         sta SCREEN+768, x
         inx
+        .endrepeat
         cpx #192
         bne @dcc_tail
         ; Reset cursor to top-left
