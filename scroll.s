@@ -973,7 +973,17 @@ irq_handler:
 
         tax                         ; X = pixel count
         lda direction
-        bmi @s2_reverse
+        bmi @s2_reverse_dbl
+
+        jmp @s2_fwd
+
+@s2_reverse_dbl:
+        txa
+        asl a                       ; double speed for reverse
+        bcc :+
+        lda #$FF                    ; clamp to 255 on overflow
+:       tax
+        jmp @s2_reverse
 
         ; --- Forward: decrement fine_scroll, coarse up on underflow ---
 @s2_fwd:
