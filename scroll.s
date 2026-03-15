@@ -232,8 +232,8 @@ enter_scroll_mode:
         lda #$01
         sta $CC                     ; $CC != 0 → cursor blink disabled
 
-        ; Switch to custom charset at $2800 for large-character rendering
-        lda #$1A                    ; screen@$0400, charset@$2800 (bank 0)
+        ; Switch to custom charset at $3800 for large-character rendering
+        lda #$1E                    ; screen@$0400, charset@$3800 (bank 0)
         sta $D018
 
         ; Count rendered content lines and compute forward scroll limit
@@ -1048,27 +1048,35 @@ scroll_screen_up:
         lda #0
         sta fwd_limit_reached
         ldx #0
-@p0:    lda SCREEN+SCREEN_COLS, x
+@p0:    .repeat 8
+        lda SCREEN+SCREEN_COLS, x
         sta SCREEN, x
         inx
+        .endrepeat
         bne @p0
 
         ldx #0
-@p1:    lda SCREEN+SCREEN_COLS+256, x
+@p1:    .repeat 8
+        lda SCREEN+SCREEN_COLS+256, x
         sta SCREEN+256, x
         inx
+        .endrepeat
         bne @p1
 
         ldx #0
-@p2:    lda SCREEN+SCREEN_COLS+512, x
+@p2:    .repeat 8
+        lda SCREEN+SCREEN_COLS+512, x
         sta SCREEN+512, x
         inx
+        .endrepeat
         bne @p2
 
         ldx #0
-@p3:    lda SCREEN+SCREEN_COLS+744, x
+@p3:    .repeat 8
+        lda SCREEN+SCREEN_COLS+744, x
         sta SCREEN+744, x
         inx
+        .endrepeat
         bne @p3
 
         ; Fill bottom row from render engine bot cursor
@@ -1095,9 +1103,11 @@ scroll_screen_up:
 @ssu_copy:
         ldy #0
 @ssu_fill:
+        .repeat 8
         lda (zp_src), y
         sta SCREEN + (ROWS-1)*SCREEN_COLS, y
         iny
+        .endrepeat
         cpy #COLS
         bne @ssu_fill
 
@@ -1105,8 +1115,10 @@ scroll_screen_up:
         lda #$0F
         ldy #0
 @ssu_clr:
+        .repeat 8
         sta COLRAM + (ROWS-1)*SCREEN_COLS, y
         iny
+        .endrepeat
         cpy #COLS
         bne @ssu_clr
 
@@ -1148,25 +1160,26 @@ scroll_screen_down:
 @ssd_dec_lo:
         dec rows_from_start_lo
 
-        ; ── Save all 3 inter-page overlaps ───────────────────────────────
+        ; ── Save all 3 inter-page overlaps (4×-unrolled) ───────────────────
         ldx #39
-@save:  lda SCREEN+256, x
+@save:  .repeat 4
+        lda SCREEN+256, x
         sta save_buf_a, x
         lda SCREEN+512, x
         sta save_buf_b, x
         lda SCREEN+768, x
         sta save_buf_c, x
         dex
+        .endrepeat
         bpl @save
 
-        ; ── Page 0: 2×-unrolled (256 bytes, offsets 0-255 → 40-295) ──────
+        ; ── Page 0: 8×-unrolled (256 bytes, offsets 0-255 → 40-295) ──────
         ldx #0
-@d0:    dex
-        lda SCREEN, x
-        sta SCREEN+SCREEN_COLS, x
+@d0:    .repeat 8
         dex
         lda SCREEN, x
         sta SCREEN+SCREEN_COLS, x
+        .endrepeat
         txa
         bne @d0
 
@@ -1200,9 +1213,11 @@ scroll_screen_down:
 @ssd_fn_go:
         ldy #0
 @ssd_fn_lp:
+        .repeat 8
         lda (zp_src), y
         sta SCREEN, y
         iny
+        .endrepeat
         cpy #COLS
         bne @ssd_fn_lp
         lda #0
@@ -1213,8 +1228,10 @@ scroll_screen_down:
         lda #$00
         ldy #0
 @ssd_fb_lp:
+        .repeat 8
         sta SCREEN, y
         iny
+        .endrepeat
         cpy #COLS
         bne @ssd_fb_lp
         lda #0
@@ -1225,70 +1242,63 @@ scroll_screen_down:
         lda #$0F
         ldy #0
 @clr_top:
+        .repeat 8
         sta COLRAM, y
         iny
+        .endrepeat
         cpy #COLS
         bne @clr_top
 
 @ssd_page1:
-        ; ── Page 1: 2×-unrolled (256 bytes) ──────────────────────────────
-        ; Upper 216 from screen, lower 40 from save_buf_a
+        ; ── Page 1: 8×-unrolled upper (216 bytes), 4×-unrolled lower ─────
         ldx #255
-@d1u:   lda SCREEN+256, x
-        sta SCREEN+256+SCREEN_COLS, x
-        dex
+@d1u:   .repeat 8
         lda SCREEN+256, x
         sta SCREEN+256+SCREEN_COLS, x
         dex
+        .endrepeat
         cpx #39
         bne @d1u
         ldx #39
-@d1l:   lda save_buf_a, x
-        sta SCREEN+256+SCREEN_COLS, x
-        dex
+@d1l:   .repeat 4
         lda save_buf_a, x
         sta SCREEN+256+SCREEN_COLS, x
         dex
+        .endrepeat
         bpl @d1l
 
-        ; ── Page 2: 2×-unrolled (256 bytes) ──────────────────────────────
-        ; Upper 216 from screen, lower 40 from save_buf_b
+        ; ── Page 2: 8×-unrolled upper (216 bytes), 4×-unrolled lower ─────
         ldx #255
-@d2u:   lda SCREEN+512, x
-        sta SCREEN+512+SCREEN_COLS, x
-        dex
+@d2u:   .repeat 8
         lda SCREEN+512, x
         sta SCREEN+512+SCREEN_COLS, x
         dex
+        .endrepeat
         cpx #39
         bne @d2u
         ldx #39
-@d2l:   lda save_buf_b, x
-        sta SCREEN+512+SCREEN_COLS, x
-        dex
+@d2l:   .repeat 4
         lda save_buf_b, x
         sta SCREEN+512+SCREEN_COLS, x
         dex
+        .endrepeat
         bpl @d2l
 
-        ; ── Page 3: 2×-unrolled (192 bytes) ──────────────────────────────
-        ; Upper 152 from screen, lower 40 from save_buf_c
+        ; ── Page 3: 8×-unrolled upper (152 bytes), 4×-unrolled lower ─────
         ldx #191
-@d3u:   lda SCREEN+768, x
-        sta SCREEN+768+SCREEN_COLS, x
-        dex
+@d3u:   .repeat 8
         lda SCREEN+768, x
         sta SCREEN+768+SCREEN_COLS, x
         dex
+        .endrepeat
         cpx #39
         bne @d3u
         ldx #39
-@d3l:   lda save_buf_c, x
-        sta SCREEN+768+SCREEN_COLS, x
-        dex
+@d3l:   .repeat 4
         lda save_buf_c, x
         sta SCREEN+768+SCREEN_COLS, x
         dex
+        .endrepeat
         bpl @d3l
 
         ; ── Retreats ────────────────────────────────────────────────────
@@ -1332,17 +1342,21 @@ scroll_screen_down:
 @ssd_df_go:
         ldy #0
 @ssd_df_lb:
+        .repeat 8
         lda (zp_src), y
         sta SCREEN, y
         iny
+        .endrepeat
         cpy #COLS
         bne @ssd_df_lb
         ; Colour for deferred fill
         lda #$0F
         ldy #0
 @ssd_df_clr:
+        .repeat 8
         sta COLRAM, y
         iny
+        .endrepeat
         cpy #COLS
         bne @ssd_df_clr
         rts
@@ -1350,16 +1364,20 @@ scroll_screen_down:
         lda #$00
         ldy #0
 @ssd_df_bl:
+        .repeat 8
         sta SCREEN, y
         iny
+        .endrepeat
         cpy #COLS
         bne @ssd_df_bl
         ; Colour for deferred blank
         lda #$0F
         ldy #0
 @ssd_df_bclr:
+        .repeat 8
         sta COLRAM, y
         iny
+        .endrepeat
         cpy #COLS
         bne @ssd_df_bclr
         rts
