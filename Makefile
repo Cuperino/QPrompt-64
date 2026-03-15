@@ -19,4 +19,4 @@ $(TARGET): $(OBJ) $(CFG)
 	$(LD) -C $(CFG) -o $(TARGET) $(OBJ)
 
 clean:
-	rm -f $(OBJ) $(TARGET)
+	rm -f $(OBJ) $(TARGET) scroll.map

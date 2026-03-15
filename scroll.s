@@ -52,9 +52,7 @@ COLRAM          = $D800
 SPR_PTR         = SCREEN + $03F8
 
 COLS            = 40
-SCREEN_COLS     = 40                ; screen memory stride (always 40)
 ROWS            = 25
-; TOTAL_BYTES     = ROWS * COLS
 
 SPR_Y_CENTER    = 140
 LIGHT_BLUE      = $0E
@@ -1091,7 +1089,7 @@ scroll_screen_up:
         sta fwd_limit_reached
         ldx #0
 @p0:    .repeat 8
-        lda SCREEN+SCREEN_COLS, x
+        lda SCREEN+COLS, x
         sta SCREEN, x
         inx
         .endrepeat
@@ -1099,7 +1097,7 @@ scroll_screen_up:
 
         ldx #0
 @p1:    .repeat 8
-        lda SCREEN+SCREEN_COLS+256, x
+        lda SCREEN+COLS+256, x
         sta SCREEN+256, x
         inx
         .endrepeat
@@ -1107,7 +1105,7 @@ scroll_screen_up:
 
         ldx #0
 @p2:    .repeat 8
-        lda SCREEN+SCREEN_COLS+512, x
+        lda SCREEN+COLS+512, x
         sta SCREEN+512, x
         inx
         .endrepeat
@@ -1115,7 +1113,7 @@ scroll_screen_up:
 
         ldx #0
 @p3:    .repeat 8
-        lda SCREEN+SCREEN_COLS+744, x
+        lda SCREEN+COLS+744, x
         sta SCREEN+744, x
         inx
         .endrepeat
@@ -1147,7 +1145,7 @@ scroll_screen_up:
 @ssu_fill:
         .repeat 8
         lda (zp_src), y
-        sta SCREEN + (ROWS-1)*SCREEN_COLS, y
+        sta SCREEN + (ROWS-1)*COLS, y
         iny
         .endrepeat
         cpy #COLS
@@ -1158,7 +1156,7 @@ scroll_screen_up:
         ldy #0
 @ssu_clr:
         .repeat 8
-        sta COLRAM + (ROWS-1)*SCREEN_COLS, y
+        sta COLRAM + (ROWS-1)*COLS, y
         iny
         .endrepeat
         cpy #COLS
@@ -1220,7 +1218,7 @@ scroll_screen_down:
 @d0:    .repeat 8
         dex
         lda SCREEN, x
-        sta SCREEN+SCREEN_COLS, x
+        sta SCREEN+COLS, x
         .endrepeat
         txa
         bne @d0
@@ -1296,7 +1294,7 @@ scroll_screen_down:
         ldx #255
 @d1u:   .repeat 8
         lda SCREEN+256, x
-        sta SCREEN+256+SCREEN_COLS, x
+        sta SCREEN+256+COLS, x
         dex
         .endrepeat
         cpx #39
@@ -1304,7 +1302,7 @@ scroll_screen_down:
         ldx #39
 @d1l:   .repeat 4
         lda save_buf_a, x
-        sta SCREEN+256+SCREEN_COLS, x
+        sta SCREEN+256+COLS, x
         dex
         .endrepeat
         bpl @d1l
@@ -1313,7 +1311,7 @@ scroll_screen_down:
         ldx #255
 @d2u:   .repeat 8
         lda SCREEN+512, x
-        sta SCREEN+512+SCREEN_COLS, x
+        sta SCREEN+512+COLS, x
         dex
         .endrepeat
         cpx #39
@@ -1321,7 +1319,7 @@ scroll_screen_down:
         ldx #39
 @d2l:   .repeat 4
         lda save_buf_b, x
-        sta SCREEN+512+SCREEN_COLS, x
+        sta SCREEN+512+COLS, x
         dex
         .endrepeat
         bpl @d2l
@@ -1330,7 +1328,7 @@ scroll_screen_down:
         ldx #191
 @d3u:   .repeat 8
         lda SCREEN+768, x
-        sta SCREEN+768+SCREEN_COLS, x
+        sta SCREEN+768+COLS, x
         dex
         .endrepeat
         cpx #39
@@ -1338,7 +1336,7 @@ scroll_screen_down:
         ldx #39
 @d3l:   .repeat 4
         lda save_buf_c, x
-        sta SCREEN+768+SCREEN_COLS, x
+        sta SCREEN+768+COLS, x
         dex
         .endrepeat
         bpl @d3l
@@ -2695,100 +2693,6 @@ mark_blank_sentinels:
 @mbs_prev_blank: .byte 0
 
 
-; ---- Refill screen from text data ------------------------------------------
-; Fills all 25 screen rows based on current text_ptr.
-; Row 0 = text_ptr - 1000, Row 24 = text_ptr - 40.
-; ---------------------------------------------------------------------------
-refill_screen:
-        ; Compute source = text_ptr - 1000 (top row)
-        sec
-        lda text_lo
-        sbc #<1000
-        sta zp_src
-        lda text_hi
-        sbc #>1000
-        sta zp_src+1
-
-        ; Wrap if source < scroll_start
-        lda zp_src+1
-        cmp scroll_start_hi
-        bcc @rf_wrap
-        bne @rf_no_wrap
-        lda zp_src
-        cmp scroll_start_lo
-        bcs @rf_no_wrap
-@rf_wrap:
-        ; Add text length = scroll_end - scroll_start
-        sec
-        lda scroll_end_lo
-        sbc scroll_start_lo
-        pha                     ; text_len_lo
-        lda scroll_end_hi
-        sbc scroll_start_hi
-        tay                     ; text_len_hi
-        clc
-        pla
-        adc zp_src
-        sta zp_src
-        tya
-        adc zp_src+1
-        sta zp_src+1
-@rf_no_wrap:
-
-        ; Set screen destination
-        lda #<SCREEN
-        sta zp_dst
-        lda #>SCREEN
-        sta zp_dst+1
-
-        ldx #ROWS                   ; 25 rows
-@rf_row:
-        ldy #0
-@rf_col:
-        lda (zp_src), y
-        sta (zp_dst), y
-        iny
-        cpy #COLS
-        bne @rf_col
-
-        ; Advance source by COLS
-        clc
-        lda zp_src
-        adc #COLS
-        sta zp_src
-        lda zp_src+1
-        adc #0
-        sta zp_src+1
-
-        ; Wrap source if >= scroll_end
-        lda zp_src+1
-        cmp scroll_end_hi
-        bcc @rf_no_src_wrap
-        bne @rf_src_wrap
-        lda zp_src
-        cmp scroll_end_lo
-        bcc @rf_no_src_wrap
-@rf_src_wrap:
-        lda scroll_start_lo
-        sta zp_src
-        lda scroll_start_hi
-        sta zp_src+1
-@rf_no_src_wrap:
-
-        ; Advance dest by COLS
-        clc
-        lda zp_dst
-        adc #COLS
-        sta zp_dst
-        lda zp_dst+1
-        adc #0
-        sta zp_dst+1
-
-        dex
-        bne @rf_row
-        rts
-
-
 ; ===========================================================================
 ;  RENDER ENGINE — large-character scroll mode
 ;  Converts editor text (screen codes) to 3×3 tile characters on the fly,
@@ -3629,12 +3533,6 @@ dialog_save: .res 40
 ; ---------------------------------------------------------------------------
 KERNAL_SETLFS   = $FFBA
 KERNAL_SETNAM   = $FFBD
-KERNAL_OPEN     = $FFC0
-KERNAL_CLOSE    = $FFC3
-KERNAL_CHKIN    = $FFC6
-KERNAL_CHKOUT   = $FFC9
-KERNAL_CLRCHN   = $FFCC
-KERNAL_CHRIN    = $FFCF
 KERNAL_SAVE     = $FFD8
 KERNAL_LOAD     = $FFD5
 
@@ -3697,7 +3595,6 @@ fp_0_05:        .byte $7C,$4C,$CC,$CC,$CD       ; 0.05 (curvature step)
 fp_1_10:        .byte $81,$0C,$CC,$CC,$CD       ; 1.10 (initial curvature)
 fp_0_15:        .byte $7E,$19,$99,$99,$9A       ; 0.15 (initial baseSpeed)
 fp_0_50:        .byte $80,$00,$00,$00,$00       ; 0.50 (min curvature / rounding)
-fp_1_0:         .byte $81,$00,$00,$00,$00       ; 1.0
 fp_2_0:         .byte $82,$00,$00,$00,$00       ; 2.0 (max curvature)
 fp_4_0:         .byte $83,$00,$00,$00,$00       ; 4.0 (max baseSpeed)
 fp_100:         .byte $87,$48,$00,$00,$00       ; 100.0 (for N.NN display)
