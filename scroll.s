@@ -3711,91 +3711,91 @@ tile_sets:
 ; Set 0  (blank)
 .byte  0, 0, 0,  0, 0, 0,  0, 0, 0
 ; Set 1  A: top frame + midbar + open legs
-.byte  1, 2, 3,  9,10,11,  4, 0, 5
+.byte  1,28, 3,  9,29,10,  4, 0, 5
 ; Set 2  B: top frame + mid-bump-right + bot frame
-.byte  1, 2, 3,  9,10,11,  6, 7, 8
+.byte  1,28, 3,  9,29,38,  6,30, 8
 ; Set 3  C: top bar open-right + left vert + bot bar open-right
-.byte  1, 2, 0,  4, 0, 0,  6, 7, 0
-; Set 4  D: frame (same shape as O for block font)
-.byte  1, 2, 3,  4, 0, 5,  6, 7, 8
+.byte  1,28, 0,  4, 0, 0,  6,30, 0
+; Set 4  D: frame with sharp left corners
+.byte 21,28, 3,  4, 0, 5, 22,30, 8
 ; Set 5  E: top bar + mid bar left + bot bar
-.byte  1, 2, 2,  9,10, 0,  6, 7, 7
+.byte  1,28,34,  9,29, 0,  6,30,35
 ; Set 6  F: top bar + mid bar left + left vert
-.byte  1, 2, 2,  9,10, 0,  4, 0, 0
-; Set 7  G: C + right stub at mid
-.byte  1, 2, 0,  4, 0,11,  6, 7, 8
+.byte  1,28,34,  9,29, 0,  4, 0, 0
+; Set 7  G: C + right stub at mid (rounded)
+.byte  1,28, 0,  4, 0,18,  6,30, 8
 ; Set 8  H: two verts + midbar
-.byte  1, 0, 3,  9,10,11,  6, 0, 8
-; Set 9  I: centered (center col only)
-.byte  0, 2, 0,  0,13, 0,  0, 7, 0
+.byte  1, 0, 3,  9,29,10,  6, 0, 8
+; Set 9  I: centered with T/invT junctions
+.byte  0,19, 0,  0,12, 0,  0,20, 0
 ; Set 10 J: top right + right vert + bot frame
-.byte  0, 2, 3,  0, 0, 5,  6, 7, 8
-; Set 11 K: left vert + upper-right + mid bar + lower-right
-.byte  1, 0, 3,  9,10, 0,  6, 0, 8
+.byte  0,28, 3,  0, 0, 5,  6,30, 8
+; Set 11 K: left vert + diagonals right + mid bar
+.byte  1, 0,26,  9,29, 0,  6, 0,23
 ; Set 12 L: left vert + bot bar
-.byte 16, 0, 0,  4, 0, 0,  6, 7, 7
-; Set 13 M: solid top two rows + open legs
-.byte  1,12, 3,  4,12, 5,  4, 0, 5
-; Set 14 N: corner tops + solid mid + open legs
-.byte  1, 0, 3,  4,12, 5,  4, 0, 5
+.byte 15, 0, 0,  4, 0, 0,  6,30, 0
+; Set 13 M: top bar with T junction + center stem + open legs
+.byte  1,19, 3,  4,12, 5,  4, 0, 5
+; Set 14 N: diagonal from TL to BR with verts
+.byte 31, 0,16,  4,32, 5,  4, 0,33
 ; Set 15 O: frame
-.byte  1, 2, 3,  4, 0, 5,  6, 7, 8
+.byte  1,28, 3,  4, 0, 5,  6,30, 8
 ; Set 16 P: top frame + mid-right-close + left vert
-.byte  1, 2, 3,  9,10,15,  4, 0, 0
+.byte  1,28, 3,  9,29,14,  4, 0, 0
 ; Set 17 Q: frame + bottom-right solid mark
-.byte  1, 2, 3,  4, 0, 5,  6, 7,12
-; Set 18 R: top frame + mid-right-close + right arm
-.byte  1, 2, 3,  9,10,11,  4, 0, 5
-; Set 19 S: top-left + midbar + bot-right
-.byte  1, 2, 2,  9,10,11,  7, 7, 8
-; Set 20 T: top bar + center stem
-.byte  2, 2, 2,  0,13, 0,  0,13, 0
+.byte  1,28, 3,  4, 0, 5,  6,30,11
+; Set 18 R: sharp top-left + mid-right-narrow + right arm
+.byte 21,28, 3,  9,29,38,  4, 0, 5
+; Set 19 S: top-left + midbar (rounded corners) + bot-right
+.byte  1,28,34, 17,29,18, 36,30, 8
+; Set 20 T: top bar with T junction + center stem
+.byte 37,19,34,  0,12, 0,  0,12, 0
 ; Set 21 U: open top + bot frame
-.byte 16, 0,17,  4, 0, 5,  6, 7, 8
-; Set 22 V: verts narrowing to center bot
-.byte 16, 0,17,  6, 0, 8,  0, 7, 0
-; Set 23 W: verts + solid mid + bot frame
-.byte 16, 0,17,  4,12, 5,  6, 7, 8
-; Set 24 X: four corners + solid mid
-.byte  1, 0, 3,  0,12, 0,  6, 0, 8
-; Set 25 Y: two top verts merge + center stem
-.byte  1, 0, 3,  0,12, 0,  0,13, 0
-; Set 26 Z: top bar + solid mid + bot bar
-.byte  2, 2, 3,  0,12, 0,  6, 7, 7
+.byte 15, 0,16,  4, 0, 5,  6,30, 8
+; Set 22 V: verts narrowing to U-shape bot
+.byte 15, 0,16,  6, 0, 8,  0,27, 0
+; Set 23 W: verts + center stem + bot bar with invT junction
+.byte 15, 0,16,  4,12, 5,  6,20, 8
+; Set 24 X: mirrored corners + cross center
+.byte  3, 0, 1,  0,24, 0,  8, 0, 6
+; Set 25 Y: diagonal tops merge via Y-junction + center stem
+.byte 23, 0,26,  0,25, 0,  0,12, 0
+; Set 26 Z: top bar + diagonal mid + bot bar
+.byte  2,28, 3,  0,26, 0,  6,30, 7
 ; Set 27 0: frame
-.byte  1, 2, 3,  4, 0, 5,  6, 7, 8
-; Set 28 1: center col with bot bar
-.byte  0, 1, 0,  0, 4, 0,  7, 7, 7
-; Set 29 2: top-right + mid-right + bot-left
-.byte  1, 2, 3,  0,10,11,  6, 7, 7
+.byte  1,28, 3,  4, 0, 5,  6,30, 8
+; Set 28 1: center col with invT bot bar
+.byte  0, 1, 0,  0, 4, 0,  0, 6, 0
+; Set 29 2: top-right + corner mid-right + bot-left
+.byte  1,28, 3,  0,29,14,  6,30, 7
 ; Set 30 3: right-side only open on left
-.byte  0, 2, 3,  0,10,11,  0, 7, 8
-; Set 31 4: verts + midbar + right leg
-.byte 16, 0,17,  9,10,11,  0, 0, 5
-; Set 32 5: top-left + mid + bot-right
-.byte  1, 2, 2,  9,10,11,  0, 7, 8
-; Set 33 6: C + midbar + bot frame
-.byte  1, 2, 2,  9,10,11,  6, 7, 8
+.byte  0,28, 3,  0,29,10,  0,30, 8
+; Set 31 4: verts + rounded mid-left + midbar + right leg
+.byte 15, 0,16, 17,29,10,  0, 0, 5
+; Set 32 5: top-left + mid + corner mid-right + bot-right
+.byte  1,28,34,  9,29, 3,  0,30, 8
+; Set 33 6: C + midbar + corner mid-right + bot frame
+.byte  1,28,34,  9,29, 3,  6,30, 8
 ; Set 34 7: top bar + right descent
-.byte  2, 2, 3,  0, 0, 5,  0, 0, 5
+.byte  0,28, 3,  0, 0, 5,  0, 0, 5
 ; Set 35 8: frame + midbar (= H with closed sides)
-.byte  1, 2, 3,  9,10,11,  6, 7, 8
-; Set 36 9: top frame + mid + bot-right
-.byte  1, 2, 3,  9,10,11,  0, 7, 8
+.byte  1,28, 3,  9,29,10,  6,30, 8
+; Set 36 9: top frame + mid (rounded left) + bot-right
+.byte  1,28, 3, 17,29,10,  0,30, 8
 ; Set 37 ,: dot at bot-left
 .byte  0, 0, 0,  0, 0, 0,  6, 0, 0
 ; Set 38 .: dot at bot-center
-.byte  0, 0, 0,  0, 0, 0,  0,14, 0
+.byte  0, 0, 0,  0, 0, 0,  0,13, 0
 ; Set 39 !: center vert + bot dot
-.byte  0,13, 0,  0,13, 0,  0,14, 0
+.byte  0,12, 0,  0,12, 0,  0,13, 0
 ; Set 40 ?: top-right curve + mid + bot dot
-.byte  0, 2, 3,  0,10, 0,  0,14, 0
+.byte  0,28, 3,  0,29, 0,  0,13, 0
 ; Set 41 -: center midbar
-.byte  0, 0, 0,  0,10, 0,  0, 0, 0
+.byte  0, 0, 0,  0,29, 0,  0, 0, 0
 ; Set 42 :: two dots
-.byte  0,14, 0,  0, 0, 0,  0,14, 0
+.byte  0,13, 0,  0, 0, 0,  0,13, 0
 ; Set 43 ': apostrophe at top-center
-.byte  0,14, 0,  0, 0, 0,  0, 0, 0
+.byte  0,13, 0,  0, 0, 0,  0, 0, 0
 
 ; Precomputed pointers into tile_sets (lo and hi bytes)
 tile_off_lo:
@@ -3887,14 +3887,21 @@ spr_left_tri:   ; at $3040
 ;   0  blank      1  top-left    2  top-ctr    3  top-right
 ;   4  left-vert  5  right-vert  6  bot-left   7  bot-ctr    8  bot-right
 ;   9  hmid-left  10 hmid-ctr   11 hmid-right  12 full-blk
-;  13  ctr-vert   14 ctr-dot
+;  13  ctr-vert   14 ctr-dot    15 mid-close-r
+;  16  top-l-vert 17 top-r-vert 18 hmid-l-close 19 hmid-r-close
+;  20  top-ctr-T  21 bot-ctr-invT 22 top-l-sq   23 bot-l-sq
+;  24  diag-tlbr  25 cross      26 top-diag-tl  27 top-diag-tr
+;  26  y-junction 27 diag-trbl  28 u-shape
+;  29  top-ctr-w  30 hmid-ctr-w 31 bot-ctr-w
+;  32  n-tl-diag  33 n-mc-diag  34 n-br-diag
+;  35  top-r-bar  36 bot-r-bar  37 bot-l-bar
 ;
-;  Padding: 1px margin on all four sides of each glyph.
+;  Padding: 2px margin top/bottom, 1px margin left/right of each glyph.
 ;  Horizontal values: $70=01110000 (left 3px, 1px L-margin)
 ;                     $0E=00001110 (right 3px, 1px R-margin)
 ;                     $7E=01111110 (full bar, 1px L+R margins)
 ;                     $38=00111000 (centre 3px)
-;  Vertical: top-tiles have row 0 blank (1px top gap);
+;  Vertical: top-tiles have rows 0-1 blank (2px top gap);
 ;            bot-tiles have row 7 blank (1px bottom gap).
 ;            Mid-tiles carry strokes through all 8 rows (no inner gap).
 ; =============================================================================
@@ -3903,14 +3910,14 @@ spr_left_tri:   ; at $3040
 ; T0 — blank
 .byte $00,$00,$00,$00,$00,$00,$00,$00
 
-; T1 — top-left corner  (1px top pad, 3-row top bar, 4-row left vert)
-.byte $00,$7E,$7E,$7E,$70,$70,$70,$70
+; T1 — top-left corner  (2px top pad, 2-row full bar, 4-row left vert, rounded)
+.byte $00,$00,$3F,$7F,$70,$70,$70,$70
 
-; T2 — top-center  (1px top pad, 3-row top bar, blank below)
-.byte $00,$7E,$7E,$7E,$00,$00,$00,$00
+; T2 — top-center  (2px top pad, 2-row top bar, blank below)
+.byte $00,$00,$7E,$7E,$00,$00,$00,$00
 
-; T3 — top-right corner  (1px top pad, 3-row top bar, 4-row right vert)
-.byte $00,$7E,$7E,$7E,$0E,$0E,$0E,$0E
+; T3 — top-right corner  (2px top pad, 2-row full bar, 4-row right vert, rounded)
+.byte $00,$00,$FC,$FE,$0E,$0E,$0E,$0E
 
 ; T4 — left vertical  (left 3px with 1px L-margin, full 8 rows)
 .byte $70,$70,$70,$70,$70,$70,$70,$70
@@ -3918,45 +3925,130 @@ spr_left_tri:   ; at $3040
 ; T5 — right vertical  (right 3px with 1px R-margin, full 8 rows)
 .byte $0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E
 
-; T6 — bot-left corner  (5-row left vert, 3-row bot bar flush to edge)
-.byte $70,$70,$70,$70,$70,$7E,$7E,$7E
+; T6 — bot-left corner  (5-row left vert, 2-row full bar, 1px bot pad, rounded)
+.byte $70,$70,$70,$70,$70,$7F,$3F,$00
 
-; T7 — bot-center  (5-row blank, 3-row bot bar flush to edge)
-.byte $00,$00,$00,$00,$00,$7E,$7E,$7E
+; T7 — bot-center  (5-row blank, 2-row bot bar, 1px bot pad)
+.byte $00,$00,$00,$00,$00,$7E,$7E,$00
 
-; T8 — bot-right corner  (5-row right vert, 3-row bot bar flush to edge)
-.byte $0E,$0E,$0E,$0E,$0E,$7E,$7E,$7E
+; T8 — bot-right corner  (5-row right vert, 2-row full bar, 1px bot pad, rounded)
+.byte $0E,$0E,$0E,$0E,$0E,$FE,$FC,$00
 
 ; T9 — hmid-left  (left vert rows 0-1, full midbar rows 2-4, left vert rows 5-7)
-.byte $70,$70,$7E,$7E,$7E,$70,$70,$70
+.byte $70,$70,$7F,$7F,$7F,$70,$70,$70
 
-; T10 — hmid-center  (blank rows 0-1, full midbar rows 2-4, blank rows 5-7)
-.byte $00,$00,$7E,$7E,$7E,$00,$00,$00
+; T10 — hmid-right  (right vert rows 0-1, full midbar rows 2-4, right vert rows 5-7)
+.byte $0E,$0E,$FE,$FE,$FE,$0E,$0E,$0E
 
-; T11 — hmid-right  (right vert rows 0-1, full midbar rows 2-4, right vert rows 5-7)
-.byte $0E,$0E,$7E,$7E,$7E,$0E,$0E,$0E
-
-; T12 — full block  (full bar with 1px L+R margins, all 8 rows)
+; T11 — full block  (full bar with 1px L+R margins, all 8 rows)
 .byte $7E,$7E,$7E,$7E,$7E,$7E,$7E,$7E
 
-; T13 — center vertical  (centre 3px $38=00111000, full 8 rows)
+; T12 — center vertical  (centre 3px $38=00111000, full 8 rows)
 .byte $38,$38,$38,$38,$38,$38,$38,$38
 
-; T14 — center dot  (centre 3px, rows 4-6, 1px bot pad)
+; T13 — center dot  (centre 3px, rows 4-6, 1px bot pad)
 .byte $00,$00,$00,$00,$38,$38,$38,$00
 
-; T15 — mid-close-right (right vert rows 0-1, bar rows 2-4, blank rows 5-7)
+; T14 — mid-close-right (right vert rows 0-1, bar rows 2-4, blank rows 5-7, rounded)
 ;        used in mid-row right of P where nothing continues below
-.byte $0E,$0E,$7E,$7E,$7E,$00,$00,$00
+.byte $0E,$0E,$FE,$FE,$FC,$00,$00,$00
 
-; T16 — top-left-vert (1px top gap, then left vert — matches top-gap of T1/T2/T3)
-.byte $00,$70,$70,$70,$70,$70,$70,$70
+; T15 — top-left-vert (2px top gap, then left vert — matches top-gap of T1/T2/T3)
+.byte $00,$00,$70,$70,$70,$70,$70,$70
 
-; T17 — top-right-vert (1px top gap, then right vert — matches top-gap of T1/T2/T3)
-.byte $00,$0E,$0E,$0E,$0E,$0E,$0E,$0E
+; T16 — top-right-vert (2px top gap, then right vert — matches top-gap of T1/T2/T3)
+.byte $00,$00,$0E,$0E,$0E,$0E,$0E,$0E
 
-; T18-T255 zero-filled to reach 256 tiles
-.res (256-18)*8, 0
+; T17 — hmid-left-close-bot (left vert rows 0-1, bar rows 2-3, rounded row 4, blank 5-7)
+;        used in mid-row left where vert ends and bar extends right (S, 9)
+.byte $70,$70,$7F,$7F,$3F,$00,$00,$00
+
+; T18 — hmid-right-close-top (blank rows 0-1, rounded row 2, bar rows 3-4, right vert 5-7)
+;        used in mid-row right where bar meets vert below (S, G)
+.byte $00,$00,$FC,$FE,$FE,$0E,$0E,$0E
+
+; T19 — top-center-T (2px top pad, 2-row full bar, 4-row center vert)
+;        T-shape junction: full-width bar with stem descending (I top, T top)
+.byte $00,$00,$C7,$FF,$38,$38,$38,$38
+
+; T20 — bot-center-invT (5-row center vert, 2-row full bar, 1px bot pad)
+;        inverted-T junction: stem ascending into full-width bar (I bot, 1 bot)
+.byte $38,$38,$38,$38,$38,$FF,$C7,$00
+
+; T21 — top-left-square (2px top pad, 2-row full bar, 4-row left vert, sharp corner)
+;        non-rounded version of T1 for D, R
+.byte $00,$00,$7F,$7F,$70,$70,$70,$70
+
+; T22 — bot-left-square (5-row left vert, 2-row full bar, 1px bot pad, sharp corner)
+;        non-rounded version of T6 for D
+.byte $70,$70,$70,$70,$70,$7F,$7F,$00
+
+; T23 — diagonal TL-BR (4px stroke from top-left to bottom-right, full width)
+;        used in N, Z, X, Y corners
+.byte $00,$E0,$F0,$78,$3C,$1E,$0F,$07
+
+; T24 — cross (4px diagonals TL-BR + TR-BL crossing at center)
+;        used in mid-center of X
+.byte $00,$E7,$FF,$7E,$3C,$7E,$FF,$E7
+
+; T25 — Y-junction (4px arms converging into 3px center vert)
+;        used in mid-center of Y
+.byte $E7,$FF,$7E,$3C,$38,$38,$38,$38
+
+; T26 — diagonal TR-BL (4px stroke from top-right to bottom-left, full width)
+;        Y-axis mirror of T23, used in X, Y corners
+.byte $00,$07,$0F,$1E,$3C,$78,$F0,$E0
+
+; T27 — U-shape (3px left+right verts to tile edges, rounded bottom bar, 1px bot pad)
+;        used in bot-center of V
+.byte $E7,$E7,$E7,$E7,$E7,$7E,$3C,$00
+
+; T28 — top-center-wide (2px top pad, 2-row full-width bar, blank below)
+;        full-width version of T2 for center column
+.byte $00,$00,$FF,$FF,$00,$00,$00,$00
+
+; T29 — hmid-center-wide (blank rows 0-1, 3-row full-width bar, blank rows 5-7)
+;        full-width version for center column
+.byte $00,$00,$FF,$FF,$FF,$00,$00,$00
+
+; T30 — bot-center-wide (5-row blank, 2-row full-width bar, 1px bot pad)
+;        full-width version of T7 for center column
+.byte $00,$00,$00,$00,$00,$FF,$FF,$00
+
+; T31 — N top-left (45° diagonal TL-BR + left vert, rounded top-left)
+;        diagonal merges with left vert connecting to tile below
+.byte $00,$70,$70,$7C,$7E,$7F,$77,$73
+
+; T32 — N mid-center (45° diagonal TL-BR, full 8 rows)
+;        continuous diagonal for N center
+.byte $E0,$F0,$78,$3C,$1E,$0F,$07,$03
+
+; T33 — N bot-right (45° diagonal TL-BR + right vert, rounded bot-right)
+;        diagonal merges with right vert connecting to tile above
+.byte $EE,$7E,$3E,$1E,$0E,$0E,$0E,$0C
+
+; T34 — top-right-bar (2px top pad, 2-row bar extended left, blank below)
+;        like T2 but bar extends to col 0
+.byte $00,$00,$FE,$FE,$00,$00,$00,$00
+
+; T35 — bot-right-bar (5-row blank, 2-row bar extended left, 1px bot pad)
+;        like T7 but bar extends to col 0
+.byte $00,$00,$00,$00,$00,$FE,$FE,$00
+
+; T36 — bot-left-bar (5-row blank, 2-row bar extended right, 1px bot pad)
+;        like T7 but bar extends to col 7
+.byte $00,$00,$00,$00,$00,$7F,$7F,$00
+
+; T37 — top-left-bar (2px top pad, 2-row bar extended right, 4-row blank)
+;        like T2 but bar extends to col 7
+.byte $00,$00,$7F,$7F,$00,$00,$00,$00
+
+; T38 — hmid-right-notch (like T10 but col 6 removed from bar rows 2-4 only)
+;        used in mid-row right of R, B — notch aligns with mid-center bar
+.byte $0E,$0E,$FC,$FC,$FC,$0E,$0E,$0E
+
+; T39-T255 zero-filled to reach 256 tiles
+.res (256-39)*8, 0
 
 ; =============================================================================
 ;  BSS segment — runtime-only document buffer (not stored in PRG file)
