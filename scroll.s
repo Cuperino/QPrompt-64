@@ -130,7 +130,6 @@ start:
         ; --- Config screen (runs with KERNAL IRQs still active) ---
         jsr config_screen_init
         jsr init_document
-        jsr build_velocity_table
 
         ; First config screen — returns destination in A
         jsr config_screen
@@ -154,7 +153,6 @@ main_dispatch:
         sta VIC_BORDER
         lda #$06
         sta VIC_BG
-        jsr build_velocity_table
         jsr config_screen
         jmp main_dispatch
 @md_ed_to_scroll:
@@ -163,6 +161,7 @@ main_dispatch:
 
 ; --- Enter scroll mode and run scroll loop ---
 enter_scroll_mode:
+        jsr build_velocity_table
         lda #2
         sta came_from               ; mark that we're in scroll mode
         jsr prepare_scroll_text
@@ -308,7 +307,6 @@ enter_scroll_mode:
         sta VIC_BORDER
         lda #$06
         sta VIC_BG
-        jsr build_velocity_table
         jsr config_screen
         jmp main_dispatch
 
@@ -326,7 +324,6 @@ enter_scroll_mode:
         sta VIC_BORDER
         lda #$06
         sta VIC_BG
-        jsr build_velocity_table
         jsr config_screen
         jmp main_dispatch
 @ste_to_scroll:
