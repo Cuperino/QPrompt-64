@@ -1139,56 +1139,16 @@ scroll_screen_down:
         sta scroll_accum
         rts
 @ssd_ok:
-        ; Clear forward limit flag (we're scrolling backward)
+        ; ── Bookkeeping ──────────────────────────────────────────────────
         lda #0
         sta fwd_limit_reached
-        ; Decrement rows_from_start (already know it's > 0)
         lda rows_from_start_lo
         bne @ssd_dec_lo
         dec rows_from_start_hi
 @ssd_dec_lo:
         dec rows_from_start_lo
-        ; Record whether the top retreat will clamp (rnd_top_row=0 AND hist
-        ; empty).  Must be checked before the retreat because both the clamped
-        ; path and a normal dec-to-0 path leave identical state afterwards.
-        ; When clamped we are reversing into the blank region — row 0 must be
-        ; filled with $00, not with the stale linebuf content (line 0).
-        lda rnd_top_row
-        ora rnd_hist_count          ; 0 only if both are 0 (will clamp)
-        sta ssd_fill_blank          ; 0 → clamped (fill blank), nonzero → ok
 
-        jsr render_retreat_top
-        jsr render_retreat_bot
-
-        ; Set zp_src = rnd_top_linebuf + rnd_top_row*40 (source for row 0 fill)
-        lda rnd_top_row
-        beq @ssd_row0
-        cmp #1
-        beq @ssd_row1
-        lda #<(rnd_top_linebuf + 80)
-        sta zp_src
-        lda #>(rnd_top_linebuf + 80)
-        sta zp_src+1
-        jmp @ssd_src_ok
-@ssd_row1:
-        lda #<(rnd_top_linebuf + 40)
-        sta zp_src
-        lda #>(rnd_top_linebuf + 40)
-        sta zp_src+1
-        jmp @ssd_src_ok
-@ssd_row0:
-        lda #<rnd_top_linebuf
-        sta zp_src
-        lda #>rnd_top_linebuf
-        sta zp_src+1
-@ssd_src_ok:
-
-        ; Copy screen rows DOWN: row 23→24, 22→23, ..., 0→1
-        ; Pages copied 0→1→2→3 so top rows update before the beam.
-        ; Each page's +40 shift overwrites the first 40 bytes of the next
-        ; page's source, so those bytes are saved upfront.
-
-        ; Save 3 inter-page overlap regions (40 bytes each)
+        ; ── Save all 3 inter-page overlaps ───────────────────────────────
         ldx #39
 @save:  lda SCREEN+256, x
         sta save_buf_a, x
@@ -1199,35 +1159,68 @@ scroll_screen_down:
         dex
         bpl @save
 
-        ; Page 0: 256 bytes (offsets 0-255 → 40-295)
+        ; ── Page 0: 2×-unrolled (256 bytes, offsets 0-255 → 40-295) ──────
         ldx #0
 @d0:    dex
+        lda SCREEN, x
+        sta SCREEN+SCREEN_COLS, x
+        dex
         lda SCREEN, x
         sta SCREEN+SCREEN_COLS, x
         txa
         bne @d0
 
-        ; Fill row 0 immediately after page 0 (before beam reaches raster 51)
+        ; ── Fill row 0 from render engine ────────────────────────────────
+        lda rnd_top_row
+        bne @ssd_fill_now
+
+        lda rnd_hist_count
+        beq @ssd_fill_blank
+
+        ; rnd_top_row=0 with history: must retreat first to re-render,
+        ; then fill.  Mark deferred.
+        lda #1
+        sta ssd_fill_blank
+        jmp @ssd_page1
+
+@ssd_fill_now:
+        ; Fill from linebuf[(rnd_top_row - 1) * 40]
+        cmp #2
+        beq @ssd_fn_r1
+        lda #<rnd_top_linebuf
+        sta zp_src
+        lda #>rnd_top_linebuf
+        sta zp_src+1
+        jmp @ssd_fn_go
+@ssd_fn_r1:
+        lda #<(rnd_top_linebuf + 40)
+        sta zp_src
+        lda #>(rnd_top_linebuf + 40)
+        sta zp_src+1
+@ssd_fn_go:
         ldy #0
-        lda ssd_fill_blank
-        bne @ssd_fill_linebuf       ; nonzero → not clamped, use linebuf
-        ; Clamped: reversing into blank region — fill with $00 (blank tile)
-@ssd_fill_blank_loop:
-        lda #$00
-        sta SCREEN, y
-        iny
-        cpy #COLS
-        bne @ssd_fill_blank_loop
-        jmp @ssd_color_top
-@ssd_fill_linebuf:
-@fill_top:
+@ssd_fn_lp:
         lda (zp_src), y
         sta SCREEN, y
         iny
         cpy #COLS
-        bne @fill_top
+        bne @ssd_fn_lp
+        lda #0
+        sta ssd_fill_blank
+        jmp @ssd_fill_color
 
-@ssd_color_top:
+@ssd_fill_blank:
+        lda #$00
+        ldy #0
+@ssd_fb_lp:
+        sta SCREEN, y
+        iny
+        cpy #COLS
+        bne @ssd_fb_lp
+        lda #0
+        sta ssd_fill_blank
+
+@ssd_fill_color:
         ; Colour for new top row = white
         lda #$0F
         ldy #0
@@ -1237,51 +1230,138 @@ scroll_screen_down:
         cpy #COLS
         bne @clr_top
 
-        ; Page 1: 256 bytes (offsets 256-511 → 296-551)
-        ; Upper 216 bytes from screen (uncorrupted), lower 40 from save_buf_a
-        ldx #0
-@d1u:   dex
+@ssd_page1:
+        ; ── Page 1: 2×-unrolled (256 bytes) ──────────────────────────────
+        ; Upper 216 from screen, lower 40 from save_buf_a
+        ldx #255
+@d1u:   lda SCREEN+256, x
+        sta SCREEN+256+SCREEN_COLS, x
+        dex
         lda SCREEN+256, x
         sta SCREEN+256+SCREEN_COLS, x
-        cpx #40
+        dex
+        cpx #39
         bne @d1u
-        ldx #40
-@d1l:   dex
+        ldx #39
+@d1l:   lda save_buf_a, x
+        sta SCREEN+256+SCREEN_COLS, x
+        dex
         lda save_buf_a, x
         sta SCREEN+256+SCREEN_COLS, x
-        txa
-        bne @d1l
+        dex
+        bpl @d1l
 
-        ; Page 2: 256 bytes (offsets 512-767 → 552-807)
-        ; Upper 216 bytes from screen (uncorrupted), lower 40 from save_buf_b
-        ldx #0
-@d2u:   dex
+        ; ── Page 2: 2×-unrolled (256 bytes) ──────────────────────────────
+        ; Upper 216 from screen, lower 40 from save_buf_b
+        ldx #255
+@d2u:   lda SCREEN+512, x
+        sta SCREEN+512+SCREEN_COLS, x
+        dex
         lda SCREEN+512, x
         sta SCREEN+512+SCREEN_COLS, x
-        cpx #40
+        dex
+        cpx #39
         bne @d2u
-        ldx #40
-@d2l:   dex
+        ldx #39
+@d2l:   lda save_buf_b, x
+        sta SCREEN+512+SCREEN_COLS, x
+        dex
         lda save_buf_b, x
         sta SCREEN+512+SCREEN_COLS, x
-        txa
-        bne @d2l
+        dex
+        bpl @d2l
 
-        ; Page 3: 192 bytes (offsets 768-959 → 808-999)
-        ; Upper 152 bytes from screen, lower 40 from save_buf_c
-        ldx #((ROWS-1)*SCREEN_COLS - 768)   ; 192
-@d3u:   dex
+        ; ── Page 3: 2×-unrolled (192 bytes) ──────────────────────────────
+        ; Upper 152 from screen, lower 40 from save_buf_c
+        ldx #191
+@d3u:   lda SCREEN+768, x
+        sta SCREEN+768+SCREEN_COLS, x
+        dex
         lda SCREEN+768, x
         sta SCREEN+768+SCREEN_COLS, x
-        cpx #40
+        dex
+        cpx #39
         bne @d3u
-        ldx #40
-@d3l:   dex
+        ldx #39
+@d3l:   lda save_buf_c, x
+        sta SCREEN+768+SCREEN_COLS, x
+        dex
         lda save_buf_c, x
         sta SCREEN+768+SCREEN_COLS, x
-        txa
-        bne @d3l
+        dex
+        bpl @d3l
 
+        ; ── Retreats ────────────────────────────────────────────────────
+        lda ssd_fill_blank
+        bne @ssd_deferred_retreat
+
+        ; Normal path: fill already done above
+        jsr render_retreat_top
+        jsr render_retreat_bot
+        rts
+
+@ssd_deferred_retreat:
+        ; Retreat re-renders linebuf, then fill row 0
+        jsr render_retreat_top
+        jsr render_retreat_bot
+        ; After retreat, rnd_top_row has been updated.  Pick linebuf row.
+        lda rnd_top_row
+        beq @ssd_df_r0
+        cmp #1
+        beq @ssd_df_r1
+        lda #<(rnd_top_linebuf + 80)
+        sta zp_src
+        lda #>(rnd_top_linebuf + 80)
+        sta zp_src+1
+        jmp @ssd_df_go
+@ssd_df_r1:
+        lda #<(rnd_top_linebuf + 40)
+        sta zp_src
+        lda #>(rnd_top_linebuf + 40)
+        sta zp_src+1
+        jmp @ssd_df_go
+@ssd_df_r0:
+        ; After retreat from 0, check if we have content or need blanks
+        lda rnd_hist_count
+        ora rnd_top_row
+        beq @ssd_df_blank
+        lda #<rnd_top_linebuf
+        sta zp_src
+        lda #>rnd_top_linebuf
+        sta zp_src+1
+@ssd_df_go:
+        ldy #0
+@ssd_df_lb:
+        lda (zp_src), y
+        sta SCREEN, y
+        iny
+        cpy #COLS
+        bne @ssd_df_lb
+        ; Colour for deferred fill
+        lda #$0F
+        ldy #0
+@ssd_df_clr:
+        sta COLRAM, y
+        iny
+        cpy #COLS
+        bne @ssd_df_clr
+        rts
+@ssd_df_blank:
+        lda #$00
+        ldy #0
+@ssd_df_bl:
+        sta SCREEN, y
+        iny
+        cpy #COLS
+        bne @ssd_df_bl
+        ; Colour for deferred blank
+        lda #$0F
+        ldy #0
+@ssd_df_bclr:
+        sta COLRAM, y
+        iny
+        cpy #COLS
+        bne @ssd_df_bclr
         rts
 
 
