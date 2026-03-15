@@ -2340,7 +2340,23 @@ draw_status_bar:
         ora #$30
         ora #$80
         sta SCREEN + 24*40 + 8
+
+        ; Shortcut hints at cols 10-33: ↑N ↑O ↑S ↑C  F3 F5 F7 F8
+        ; (↑ = up-arrow $1E as Ctrl indicator; ↑C = Ctrl+CLR)
+        ldx #0
+@dsb_hints:
+        lda @dsb_hint_str, x
+        beq @dsb_rts
+        ora #$80
+        sta SCREEN + 24*40 + 10, x
+        inx
+        bne @dsb_hints
+@dsb_rts:
         rts
+@dsb_hint_str:
+        ; ↑N  ↑O  ↑S    F1  F3  F5  F7  F8
+        .byte $1E,sc_N,__,$1E,sc_O,__,$1E,sc_S,__,__,__
+        .byte sc_F,$31,__,sc_F,$33,__,sc_F,$35,__,sc_F,$37,__,sc_F,$38,0
 
 ; ---- Dialog system ----------------------------------------------------------
 ; Shows a message on row 24, waits for RETURN (confirm) or ← (cancel).
