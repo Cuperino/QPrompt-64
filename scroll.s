@@ -134,10 +134,25 @@ start:
         ; First config screen — returns destination in A
         jsr config_screen
 
-; --- Top-level dispatch: A = 0 (scroll) or 1 (editor) ---
+; --- Top-level dispatch: A = 0 (scroll/resume), 1 (editor), 2 (scroll/F3) ---
 main_dispatch:
         cmp #1
         beq @md_editor
+        cmp #2
+        beq @md_scroll_f3
+        ; A=0: scroll — resume if saved, else fresh
+        lda scroll_has_saved
+        beq @md_fresh
+        lda #1
+        sta scroll_entry_mode       ; F5 resume
+        jmp enter_scroll_mode
+@md_fresh:
+        lda #0
+        sta scroll_entry_mode       ; fresh start
+        jmp enter_scroll_mode
+@md_scroll_f3:
+        lda #2
+        sta scroll_entry_mode       ; F3 jump to cursor
         jmp enter_scroll_mode
 
 @md_editor:
@@ -145,18 +160,31 @@ main_dispatch:
         sta VIC_BORDER
         sta VIC_BG
         jsr enter_editor
-        ; Editor returned — A: 0=go to config, 1=go to scroll
-        cmp #1
-        beq @md_ed_to_scroll
-        ; Go to config
+        ; Editor returned — A: 0=go to config, 1=scroll(F5), 2=scroll(F3)
+        cmp #0
+        beq @md_to_config
+        cmp #2
+        beq @md_ed_f3
+        ; A=1: F5 resume scroll
+        lda scroll_has_saved
+        beq @md_ed_fresh
+        lda #1
+        sta scroll_entry_mode
+        jmp enter_scroll_mode
+@md_ed_fresh:
+        lda #0
+        sta scroll_entry_mode
+        jmp enter_scroll_mode
+@md_ed_f3:
+        lda #2
+        sta scroll_entry_mode
+        jmp enter_scroll_mode
+@md_to_config:
         lda #$0E
         sta VIC_BORDER
         lda #$06
         sta VIC_BG
         jsr config_screen
-        jmp main_dispatch
-@md_ed_to_scroll:
-        lda #0                      ; destination = scroll
         jmp main_dispatch
 
 ; --- Enter scroll mode and run scroll loop ---
@@ -247,8 +275,33 @@ enter_scroll_mode:
         jsr count_rendered_lines
 
         ; Build render state and fill screen with large-character tiles
+        lda scroll_entry_mode
+        cmp #1
+        beq @esm_resume
+        cmp #2
+        beq @esm_f3
+        ; Mode 0: fresh start
         jsr render_init
+        jmp @esm_install_irq
+@esm_resume:
+        ; F5 resume: restore saved position
+        lda saved_rows_lo
+        sta target_rows_lo
+        lda saved_rows_hi
+        sta target_rows_hi
+        jsr clamp_target_rows
+        jsr render_init_at_position
+        lda saved_fine_scroll
+        sta fine_scroll
+        jmp @esm_install_irq
+@esm_f3:
+        ; F3: jump to cursor position
+        jsr compute_f3_target
+        jsr clamp_target_rows
+        jsr render_init_at_position
+        jmp @esm_install_irq
 
+@esm_install_irq:
         ; ---- Install raster IRQ chain ----
         lda #$7F
         sta CIA1_ICR                ; disable CIA timer IRQs
@@ -293,6 +346,15 @@ enter_scroll_mode:
         jsr scroll_screen_down
         jmp @forever
 @exit_scroll:
+        ; Save scroll position for F5 resume
+        lda rows_from_start_lo
+        sta saved_rows_lo
+        lda rows_from_start_hi
+        sta saved_rows_hi
+        lda fine_scroll
+        sta saved_fine_scroll
+        lda #1
+        sta scroll_has_saved
         ; enter_config: 1=F1 (config), 2=F3 (editor)
         lda enter_config
         pha
@@ -316,18 +378,32 @@ enter_scroll_mode:
         sta VIC_BORDER
         sta VIC_BG
         jsr enter_editor
-        ; Editor returned — A: 0=config, 1=scroll
+        ; Editor returned — A: 0=config, 1=scroll(F5), 2=scroll(F3)
+        cmp #2
+        beq @ste_f3
         cmp #1
-        beq @ste_to_scroll
-        ; Go to config
+        beq @ste_f5
+        jmp @ste_to_config
+@ste_f5:
+        lda scroll_has_saved
+        beq @ste_fresh
+        lda #1
+        sta scroll_entry_mode
+        jmp enter_scroll_mode
+@ste_fresh:
+        lda #0
+        sta scroll_entry_mode
+        jmp enter_scroll_mode
+@ste_f3:
+        lda #2
+        sta scroll_entry_mode
+        jmp enter_scroll_mode
+@ste_to_config:
         lda #$0E
         sta VIC_BORDER
         lda #$06
         sta VIC_BG
         jsr config_screen
-        jmp main_dispatch
-@ste_to_scroll:
-        lda #0                      ; destination = scroll
         jmp main_dispatch
 
 
@@ -1736,9 +1812,9 @@ editor_loop:
         bne @not_f1_ed
         jmp ed_exit
 @not_f1_ed:
-        cmp #$86                    ; F3 → exit to scroll
+        cmp #$86                    ; F3 → exit to scroll (jump to cursor)
         bne @not_f3_ed
-        jmp ed_exit_to_scroll
+        jmp ed_exit_to_scroll_f3
 @not_f3_ed:
         cmp #$0D                    ; RETURN
         bne @not_return
@@ -1949,13 +2025,22 @@ ed_exit:
         lda #0                      ; return 0 = go to config
         rts
 
-; ---- F3: Exit to scroll -----------------------------------------------------
+; ---- F5: Exit to scroll (resume) --------------------------------------------
 ed_exit_to_scroll:
         jsr undraw_cursor
         jsr save_editor_page
         lda #1
         sta came_from               ; came from editor
-        lda #1                      ; return 1 = go to scroll
+        lda #1                      ; return 1 = go to scroll (F5 resume)
+        rts
+
+; ---- F3: Exit to scroll (jump to cursor) -----------------------------------
+ed_exit_to_scroll_f3:
+        jsr undraw_cursor
+        jsr save_editor_page
+        lda #1
+        sta came_from               ; came from editor
+        lda #2                      ; return 2 = go to scroll (F3 jump to cursor)
         rts
 
 ; ---- Calculate cursor screen address ----------------------------------------
@@ -2371,6 +2456,7 @@ do_ctrl_n:
         sta current_page
         sta cursor_x
         sta cursor_y
+        sta scroll_has_saved        ; invalidate saved scroll position
         jsr load_editor_page
         jsr draw_status_bar
         jsr draw_cursor
@@ -2407,6 +2493,7 @@ do_ctrl_o:
         sta current_page
         sta cursor_x
         sta cursor_y
+        sta scroll_has_saved        ; invalidate saved scroll position
         jsr load_editor_page
         jsr draw_status_bar
         jsr draw_cursor
@@ -2513,6 +2600,7 @@ init_document:
         sta current_page
         sta cursor_x
         sta cursor_y
+        sta scroll_has_saved        ; invalidate saved scroll position
         rts
 
 
@@ -3034,6 +3122,270 @@ render_compute_line:
 @chi:       .byte 0
 
 ; ---------------------------------------------------------------------------
+;  clamp_target_rows
+;  Ensures target_rows_lo/hi <= max_rows_fwd_lo/hi.
+; ---------------------------------------------------------------------------
+clamp_target_rows:
+        lda target_rows_hi
+        cmp max_rows_fwd_hi
+        bcc @ctr_ok
+        bne @ctr_clamp
+        lda target_rows_lo
+        cmp max_rows_fwd_lo
+        bcc @ctr_ok
+        beq @ctr_ok
+@ctr_clamp:
+        lda max_rows_fwd_lo
+        sta target_rows_lo
+        lda max_rows_fwd_hi
+        sta target_rows_hi
+@ctr_ok:
+        rts
+
+; ---------------------------------------------------------------------------
+;  divide_by_3
+;  Divides target_rows_lo/hi by 3.
+;  Output: riap_quotient_lo/hi = quotient, A = remainder (0-2)
+; ---------------------------------------------------------------------------
+divide_by_3:
+        lda #0
+        sta riap_quotient_lo
+        sta riap_quotient_hi
+        lda target_rows_lo
+        sta riap_div_tmp_lo
+        lda target_rows_hi
+        sta riap_div_tmp_hi
+@db3_loop:
+        lda riap_div_tmp_hi
+        bne @db3_sub
+        lda riap_div_tmp_lo
+        cmp #3
+        bcc @db3_done
+@db3_sub:
+        sec
+        lda riap_div_tmp_lo
+        sbc #3
+        sta riap_div_tmp_lo
+        bcs @db3_nob
+        dec riap_div_tmp_hi
+@db3_nob:
+        inc riap_quotient_lo
+        bne @db3_loop
+        inc riap_quotient_hi
+        jmp @db3_loop
+@db3_done:
+        lda riap_div_tmp_lo     ; remainder in A
+        rts
+
+riap_quotient_lo:  .byte 0
+riap_quotient_hi:  .byte 0
+riap_div_tmp_lo:   .byte 0
+riap_div_tmp_hi:   .byte 0
+riap_remainder:    .byte 0
+
+; ---------------------------------------------------------------------------
+;  render_init_at_position
+;  Positions the scroll viewport at target_rows_lo/hi coarse rows from start.
+;  Fast-forwards through rendered lines, patches scroll_start, calls
+;  render_init to fill screen rows 12-24, then restores scroll_start.
+;  Line L appears at screen row 12 (center).  Rows 0-11 are blank.
+;  History ring is empty; backward scroll fills blanks until reaching start.
+; ---------------------------------------------------------------------------
+render_init_at_position:
+        ; If target_rows == 0, just call render_init
+        lda target_rows_lo
+        ora target_rows_hi
+        bne @riap_nonzero
+        jmp render_init
+
+@riap_nonzero:
+        ; Save original scroll_start
+        lda scroll_start_lo
+        sta riap_save_lo
+        lda scroll_start_hi
+        sta riap_save_hi
+
+        ; Divide target_rows by 3 → L (rendered line count)
+        jsr divide_by_3
+        ; Snap target_rows to L*3 (subtract remainder)
+        sec
+        lda target_rows_lo
+        sbc riap_div_tmp_lo         ; remainder still in riap_div_tmp_lo
+        sta target_rows_lo
+        bcs @riap_no_borrow
+        dec target_rows_hi
+@riap_no_borrow:
+
+        ; Fast-forward L rendered lines from scroll_start
+        lda scroll_start_lo
+        sta zp_src
+        lda scroll_start_hi
+        sta zp_src+1
+@riap_ff:
+        lda riap_quotient_lo
+        ora riap_quotient_hi
+        beq @riap_ff_done
+        lda #<rnd_bot_linebuf
+        sta zp_dst
+        lda #>rnd_bot_linebuf
+        sta zp_dst+1
+        jsr render_compute_line
+        lda riap_quotient_lo
+        bne @riap_dec
+        dec riap_quotient_hi
+@riap_dec:
+        dec riap_quotient_lo
+        jmp @riap_ff
+
+@riap_ff_done:
+        ; Patch scroll_start to line L
+        lda zp_src
+        sta scroll_start_lo
+        lda zp_src+1
+        sta scroll_start_hi
+
+        ; render_init fills rows 12-24 starting from patched scroll_start
+        jsr render_init
+
+        ; Restore original scroll_start
+        lda riap_save_lo
+        sta scroll_start_lo
+        lda riap_save_hi
+        sta scroll_start_hi
+
+        ; Set rows_from_start = target_rows (rounded down to multiple of 3)
+        ; target_rows = L * 3 (the division discarded the remainder)
+        ; Recompute: riap_quotient was consumed, so use target_rows directly
+        ; but snapped to a multiple of 3.
+        lda target_rows_lo
+        sta rows_from_start_lo
+        lda target_rows_hi
+        sta rows_from_start_hi
+        rts
+
+riap_save_lo: .byte 0
+riap_save_hi: .byte 0
+
+; ---------------------------------------------------------------------------
+;  compute_f3_target
+;  Finds the rendered line containing the editor cursor position.
+;  Sets target_rows_lo/hi = rendered_line_number * 3.
+;  Uses rnd_wk_csrc to hold cursor address (safe: only used inside
+;  render_compute_line which we call, but we save/restore around it).
+; ---------------------------------------------------------------------------
+compute_f3_target:
+        ; Compute cursor doc_buffer address:
+        ;   cursor_addr = page_addr[current_page] + cursor_y * 40 + cursor_x
+        ldx current_page
+        lda page_addr_lo, x
+        sta cf3_cursor_lo
+        lda page_addr_hi, x
+        sta cf3_cursor_hi
+
+        ; Add cursor_y * 40 (y*40 = y*8 + y*32)
+        lda cursor_y
+        asl                         ; *2
+        asl                         ; *4
+        asl                         ; *8
+        sta cf3_tmp
+        lda #0
+        sta cf3_tmp+1
+        lda cursor_y
+        asl                         ; *2
+        asl                         ; *4
+        asl                         ; *8
+        asl                         ; *16
+        rol cf3_tmp+1
+        asl                         ; *32
+        rol cf3_tmp+1
+        clc
+        adc cf3_tmp                 ; lo byte of y*40
+        sta cf3_tmp
+        bcc @cf3_no_carry1
+        inc cf3_tmp+1
+@cf3_no_carry1:
+        clc
+        lda cf3_cursor_lo
+        adc cf3_tmp
+        sta cf3_cursor_lo
+        lda cf3_cursor_hi
+        adc cf3_tmp+1
+        sta cf3_cursor_hi
+
+        ; Add cursor_x
+        clc
+        lda cf3_cursor_lo
+        adc cursor_x
+        sta cf3_cursor_lo
+        bcc @cf3_no_carry2
+        inc cf3_cursor_hi
+@cf3_no_carry2:
+        ; cf3_cursor_lo/hi = absolute doc_buffer address of cursor
+
+        ; Iterate rendered lines from scroll_start
+        lda scroll_start_lo
+        sta zp_src
+        lda scroll_start_hi
+        sta zp_src+1
+        lda #0
+        sta cf3_line_lo
+        sta cf3_line_hi
+
+@cf3_loop:
+        ; Render to scratch (rnd_bot_linebuf) — advances zp_src past this line
+        lda #<rnd_bot_linebuf
+        sta zp_dst
+        lda #>rnd_bot_linebuf
+        sta zp_dst+1
+        jsr render_compute_line
+
+        ; Check if cursor_addr < zp_src (i.e., cursor is within this line)
+        lda cf3_cursor_hi
+        cmp zp_src+1
+        bcc @cf3_found              ; cursor_hi < line_end_hi → found
+        bne @cf3_next               ; cursor_hi > line_end_hi → not yet
+        lda cf3_cursor_lo
+        cmp zp_src
+        bcc @cf3_found              ; cursor_lo < line_end_lo → found
+
+@cf3_next:
+        inc cf3_line_lo
+        bne @cf3_check_bounds
+        inc cf3_line_hi
+@cf3_check_bounds:
+        ; Check if zp_src >= scroll_end → use current line as fallback
+        lda zp_src+1
+        cmp scroll_end_hi
+        bcc @cf3_loop
+        bne @cf3_found
+        lda zp_src
+        cmp scroll_end_lo
+        bcc @cf3_loop
+
+@cf3_found:
+        ; target_rows = cf3_line * 3 (line*2 + line)
+        lda cf3_line_lo
+        asl
+        sta target_rows_lo
+        lda cf3_line_hi
+        rol
+        sta target_rows_hi
+        clc
+        lda target_rows_lo
+        adc cf3_line_lo
+        sta target_rows_lo
+        lda target_rows_hi
+        adc cf3_line_hi
+        sta target_rows_hi
+        rts
+
+cf3_cursor_lo: .byte 0
+cf3_cursor_hi: .byte 0
+cf3_line_lo:   .byte 0
+cf3_line_hi:   .byte 0
+cf3_tmp:       .byte 0, 0
+
+; ---------------------------------------------------------------------------
 ;  count_rendered_lines
 ;  Iterates through the entire document text, calling render_compute_line to
 ;  count how many rendered lines the content produces.  Stores the forward
@@ -3141,6 +3493,16 @@ render_init:
         cpy #224
         bne @ri_clr_scr2            ; 224 more bytes (rows 6–11), total 480
 
+        ; Fall through to render_init_fill (rows 12-24 + bot linebuf)
+        jmp render_init_fill
+
+; ---------------------------------------------------------------------------
+;  render_init_fill
+;  Fills screen rows 12-24 and rnd_bot_linebuf from zp_src.
+;  Expects zp_src pointing to the first content line for screen row 12.
+;  Sets rnd_bot_lo/hi, rnd_bot_next_lo/hi, rnd_bot_row.
+; ---------------------------------------------------------------------------
+render_init_fill:
         ; ── Set destination to screen row 12 (SCREEN + 480) ──────────────
         lda #<(SCREEN + 480)
         sta zp_dst
@@ -3149,31 +3511,32 @@ render_init:
 
         ; ── Lines 0-3: render into rnd_bot_linebuf, copy to rows 12-23 ───
         ldx #4
-@ri_l4: stx @ri_cnt
-        jsr @ri_render_bot      ; renders to rnd_bot_linebuf, advances zp_src
+@rif_l4:
+        stx rif_cnt
+        jsr ri_render_bot       ; renders to rnd_bot_linebuf, advances zp_src
         lda zp_src
-        sta @ri_next_lo
+        sta rif_next_lo
         lda zp_src+1
-        sta @ri_next_hi
+        sta rif_next_hi
         lda #<rnd_bot_linebuf
         sta zp_src
         lda #>rnd_bot_linebuf
         sta zp_src+1
-        jsr @ri_copy120_adv
-        lda @ri_next_lo
+        jsr ri_copy120_adv
+        lda rif_next_lo
         sta zp_src
-        lda @ri_next_hi
+        lda rif_next_hi
         sta zp_src+1
-        ldx @ri_cnt
+        ldx rif_cnt
         dex
-        bne @ri_l4
+        bne @rif_l4
 
         ; ── Render line 4 → rnd_bot_linebuf (final bot position) ─────────
         lda zp_src
         sta rnd_bot_lo
         lda zp_src+1
         sta rnd_bot_hi
-        jsr @ri_render_bot
+        jsr ri_render_bot
         lda zp_src
         sta rnd_bot_next_lo
         lda zp_src+1
@@ -3184,53 +3547,58 @@ render_init:
         lda #>rnd_bot_linebuf
         sta zp_src+1
         ldy #0
-@ri_c40:
+@rif_c40:
         lda (zp_src), y
         sta (zp_dst), y
         iny
         cpy #COLS
-        bne @ri_c40
+        bne @rif_c40
 
         lda #1
         sta rnd_bot_row
         rts
 
+; ---------------------------------------------------------------------------
+;  Shared render helpers (used by render_init, render_init_fill,
+;  render_init_at_position)
+; ---------------------------------------------------------------------------
+
         ; helper: render from zp_src into rnd_top_linebuf (zp_dst is saved/restored)
-@ri_render_top:
+ri_render_top:
         lda zp_dst
-        sta @ri_dst_save
+        sta ri_dst_save
         lda zp_dst+1
-        sta @ri_dst_save+1
+        sta ri_dst_save+1
         lda #<rnd_top_linebuf
         sta zp_dst
         lda #>rnd_top_linebuf
         sta zp_dst+1
         jsr render_compute_line
-        lda @ri_dst_save
+        lda ri_dst_save
         sta zp_dst
-        lda @ri_dst_save+1
+        lda ri_dst_save+1
         sta zp_dst+1
         rts
 
         ; helper: render from zp_src into rnd_bot_linebuf (zp_dst saved/restored)
-@ri_render_bot:
+ri_render_bot:
         lda zp_dst
-        sta @ri_dst_save
+        sta ri_dst_save
         lda zp_dst+1
-        sta @ri_dst_save+1
+        sta ri_dst_save+1
         lda #<rnd_bot_linebuf
         sta zp_dst
         lda #>rnd_bot_linebuf
         sta zp_dst+1
         jsr render_compute_line
-        lda @ri_dst_save
+        lda ri_dst_save
         sta zp_dst
-        lda @ri_dst_save+1
+        lda ri_dst_save+1
         sta zp_dst+1
         rts
 
         ; helper: copy 120 bytes from (zp_src) to (zp_dst), advance zp_dst by 120
-@ri_copy120_adv:
+ri_copy120_adv:
         ldy #0
 @rc120: lda (zp_src), y
         sta (zp_dst), y
@@ -3246,10 +3614,10 @@ render_init:
 @rc120_ok:
         rts
 
-@ri_cnt:      .byte 0
-@ri_next_lo:  .byte 0
-@ri_next_hi:  .byte 0
-@ri_dst_save: .byte 0, 0
+rif_cnt:      .byte 0
+rif_next_lo:  .byte 0
+rif_next_hi:  .byte 0
+ri_dst_save:  .byte 0, 0
 
 ; ---------------------------------------------------------------------------
 ;  render_advance_top — advance top cursor one tile row forward
@@ -4137,3 +4505,12 @@ ssd_fill_blank:  .res 1           ; non-zero → top retreat clamped, fill row 0
 max_rows_fwd_lo: .res 1           ; 16-bit forward scroll limit (lo) = 3 × rendered line count
 max_rows_fwd_hi: .res 1           ;   (hi)
 fwd_limit_reached: .res 1        ; nonzero → at forward scroll limit (used by IRQ to avoid flicker)
+
+; Scroll position memory
+saved_rows_lo:     .res 1        ; saved rows_from_start_lo for F5 resume
+saved_rows_hi:     .res 1        ; saved rows_from_start_hi for F5 resume
+saved_fine_scroll: .res 1        ; saved fine_scroll for F5 resume
+scroll_has_saved:  .res 1        ; nonzero = saved position is valid
+scroll_entry_mode: .res 1        ; 0=fresh, 1=F5 resume, 2=F3 jump-to-cursor
+target_rows_lo:    .res 1        ; target rows_from_start for positioning
+target_rows_hi:    .res 1
