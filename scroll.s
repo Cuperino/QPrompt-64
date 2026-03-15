@@ -171,10 +171,20 @@ enter_scroll_mode:
 
         sei
 
+        ; Wait for VBlank to prevent mid-frame VIC changes
+@enter_vbl:
+        lda VIC_RASTER
+        cmp #251
+        bcc @enter_vbl
+
         ; Black border and background
         lda #0
         sta VIC_BORDER
         sta VIC_BG
+
+        ; Blank display during setup (DEN=0); re-enabled by IRQ state 2
+        lda #$0B                    ; RSEL=1, DEN=0, YSCROLL=3
+        sta VIC_CTRL1
 
         ; Clear screen with spaces and set colour RAM
         jsr clear_screen
@@ -254,8 +264,8 @@ enter_scroll_mode:
         lda #0
         sta irq_state
 
-        lda VIC_CTRL1
-        and #$7F                    ; clear raster bit 8
+        lda fine_scroll
+        ora #%00010000              ; DEN=1, YSCROLL=fine_scroll
         sta VIC_CTRL1
         lda #(RASTER_ZONE_ON - 3)
         sta VIC_RASTER
@@ -714,6 +724,10 @@ config_screen:
         inx
         .endrepeat
         bne @ccr
+
+        ; Re-enable display (may have been blanked during scroll→config transition)
+        lda #$1B
+        sta VIC_CTRL1
         rts
 
 ; Convert PETSCII character in A to screen code (simple subset)
@@ -1564,6 +1578,16 @@ read_keyboard:
 disable_raster_restore_kernal:
         sei
 
+        ; Wait for VBlank to avoid mid-frame changes
+@drr_vbl:
+        lda VIC_RASTER
+        cmp #251
+        bcc @drr_vbl
+
+        ; Blank display immediately (DEN=0) to hide transition
+        lda #$0B                    ; RSEL=1, DEN=0, YSCROLL=3
+        sta VIC_CTRL1
+
         ; Disable VIC raster IRQ
         lda #$00
         sta VIC_IRQ_MASK
@@ -1586,9 +1610,6 @@ disable_raster_restore_kernal:
         lda #$14                    ; screen@$0400, ROM charset@$1000 (bank 0)
         sta $D018
 
-        ; Normal 25-row display
-        lda #$1B
-        sta VIC_CTRL1
         lda #$08                    ; CSEL=1 (40-col mode)
         sta VIC_CTRL2
 
@@ -1609,6 +1630,9 @@ disable_raster_restore_kernal:
 ; Returns when F1 is pressed (came_from set to 1 = editor).
 ; ---------------------------------------------------------------------------
 enter_editor:
+        ; Clean any $FF blank-line sentinels left by the scroll renderer
+        jsr clean_doc_sentinels
+
         ; Set black border/background
         lda #0
         sta VIC_BORDER
@@ -1664,6 +1688,10 @@ enter_editor:
 
         ; Draw cursor (reverse char at position)
         jsr draw_cursor
+
+        ; Re-enable display (may have been blanked during scroll→editor transition)
+        lda #$1B
+        sta VIC_CTRL1
 
         ; Flush keyboard buffer
         lda #0
@@ -2501,6 +2529,9 @@ prepare_scroll_text:
         ; Note: editor page is already saved by ed_exit before we get here.
         ; Do NOT call save_editor_page — screen may contain config/scroll content.
 
+        ; Clean any leftover sentinels from a previous scroll session
+        jsr clean_doc_sentinels
+
         ; scroll_start = doc_buffer
         lda #<doc_buffer
         sta scroll_start_lo
@@ -2560,7 +2591,108 @@ prepare_scroll_text:
         sta text_lo
         lda scroll_start_hi
         sta text_hi
+
+        ; Mark blank lines with $FF sentinels for the renderer
+        jsr mark_blank_sentinels
         rts
+
+
+; ---- Clean doc_buffer sentinels: replace $FF → $20 at byte[0] of each line ---
+clean_doc_sentinels:
+        lda #<doc_buffer
+        sta zp_src
+        lda #>doc_buffer
+        sta zp_src+1
+        ; line_count = total_pages * 24
+        lda total_pages
+        asl                         ; *2
+        asl                         ; *4
+        asl                         ; *8
+        sta @cds_tmp
+        asl                         ; *16
+        clc
+        adc @cds_tmp                ; *24
+        sta @cds_count
+@cds_loop:
+        ldy #0
+        lda (zp_src), y
+        cmp #$FF
+        bne @cds_next
+        lda #$20
+        sta (zp_src), y
+@cds_next:
+        lda zp_src
+        clc
+        adc #40
+        sta zp_src
+        bcc @cds_adv_ok
+        inc zp_src+1
+@cds_adv_ok:
+        dec @cds_count
+        bne @cds_loop
+        rts
+@cds_tmp:   .byte 0
+@cds_count: .byte 0
+
+
+; ---- Mark blank lines with $FF sentinel in doc_buffer ------------------------
+; Scans doc_buffer line-by-line (40 bytes each).  For each run of consecutive
+; blank lines (all spaces), sets byte[0] of the FIRST blank line to $FF.
+; The renderer treats $FF as "produce one blank rendered line".
+; ---------------------------------------------------------------------------
+mark_blank_sentinels:
+        lda #<doc_buffer
+        sta zp_src
+        lda #>doc_buffer
+        sta zp_src+1
+        ; line_count = total_pages * 24
+        lda total_pages
+        asl                         ; *2
+        asl                         ; *4
+        asl                         ; *8
+        sta @mbs_tmp
+        asl                         ; *16
+        clc
+        adc @mbs_tmp                ; *24
+        sta @mbs_count
+        lda #0
+        sta @mbs_prev_blank
+@mbs_loop:
+        ; Check if all 40 bytes of this line are spaces
+        ldy #0
+@mbs_check:
+        lda (zp_src), y
+        cmp #$20
+        bne @mbs_not_blank
+        iny
+        cpy #40
+        bne @mbs_check
+        ; Line is all spaces — mark if first blank in run
+        lda @mbs_prev_blank
+        bne @mbs_next               ; already in blank run, skip
+        ldy #0
+        lda #$FF
+        sta (zp_src), y
+        lda #1
+        sta @mbs_prev_blank
+        jmp @mbs_next
+@mbs_not_blank:
+        lda #0
+        sta @mbs_prev_blank
+@mbs_next:
+        lda zp_src
+        clc
+        adc #40
+        sta zp_src
+        bcc @mbs_adv_ok
+        inc zp_src+1
+@mbs_adv_ok:
+        dec @mbs_count
+        bne @mbs_loop
+        rts
+@mbs_tmp:        .byte 0
+@mbs_count:      .byte 0
+@mbs_prev_blank: .byte 0
 
 
 ; ---- Refill screen from text data ------------------------------------------
@@ -2718,6 +2850,21 @@ render_compute_line:
         inc zp_src+1
         jmp @ww_skip_sp
 @ww_no_sp:
+        ; ── check for blank-line sentinel ──────────────────────────────────
+        cmp #$FF
+        bne @ww_not_sentinel
+        ; Sentinel found: blank line marker
+        lda rnd_wk_first
+        beq @ww_sent_blank
+        jmp @ww_done            ; words placed → end line, $FF stays for next call
+@ww_sent_blank:
+        ; No words → produce blank line: skip $FF and return
+        inc zp_src
+        bne @ww_sent_ok
+        inc zp_src+1
+@ww_sent_ok:
+        jmp @ww_done
+@ww_not_sentinel:
         ; ── measure next word (count non-space chars) ───────────────────────
         lda zp_src
         sta rnd_wk_csrc
@@ -2738,6 +2885,8 @@ render_compute_line:
         ldy #0
         lda (rnd_wk_csrc), y
         cmp #$20
+        beq @ww_m_end
+        cmp #$FF                ; sentinel also ends word
         beq @ww_m_end
         inc rnd_wk_csrc
         bne @ww_m_ok2
