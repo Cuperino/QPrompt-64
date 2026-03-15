@@ -346,6 +346,10 @@ enter_scroll_mode:
         jsr scroll_screen_down
         jmp @forever
 @exit_scroll:
+        ; enter_config: 1=F1 (config), 2=F3 (editor), 3=Ctrl+T (reset)
+        lda enter_config
+        cmp #3
+        beq @scroll_reset
         ; Save scroll position for F5 resume
         lda rows_from_start_lo
         sta saved_rows_lo
@@ -355,7 +359,6 @@ enter_scroll_mode:
         sta saved_fine_scroll
         lda #1
         sta scroll_has_saved
-        ; enter_config: 1=F1 (config), 2=F3 (editor)
         lda enter_config
         pha
         lda #0
@@ -371,6 +374,15 @@ enter_scroll_mode:
         sta VIC_BG
         jsr config_screen
         jmp main_dispatch
+
+@scroll_reset:
+        ; --- Ctrl+T: reset scroll to start of document ---
+        lda #0
+        sta enter_config
+        sta scroll_has_saved
+        sta scroll_entry_mode       ; fresh start
+        jsr disable_raster_restore_kernal
+        jmp enter_scroll_mode
 
 @scroll_to_editor:
         ; --- F3: go directly to editor ---
@@ -1591,6 +1603,16 @@ read_keyboard:
         sta enter_config
         rts
 @not_f3:
+        ; Check for Ctrl+T (T matrix code $16) → reset to start
+        cmp #$16
+        bne @not_ctrl_t
+        lda SHIFT_FLAG
+        and #$04                    ; bit 2 = CTRL
+        beq @not_ctrl_t
+        lda #3
+        sta enter_config            ; 3 = reset to start
+        rts
+@not_ctrl_t:
         ; Compare against number key matrix codes
         cmp #$38                    ; key "1" → step 0 (still)
         bne @not1
