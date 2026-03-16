@@ -127,6 +127,9 @@ rnd_wk_csrc:    .res 2              ; ZP: working source ptr for render word-mea
 
 ; ---- entry point -----------------------------------------------------------
 start:
+        ; --- Detect PAL or NTSC system ---
+        jsr detect_pal_ntsc
+
         ; --- Config screen (runs with KERNAL IRQs still active) ---
         jsr config_screen_init
         jsr init_document
@@ -233,10 +236,10 @@ enter_scroll_mode:
         sta VIC_CTRL2
 
         ; --- Set up sprites ---
-        ; Sprite data pointers: sprite 0 at $3000/64=$C0, sprite 1 at $3040/64=$C1
-        lda #$C0
+        ; Sprite data pointers: sprite 0 at $3100/64=$C4, sprite 1 at $3140/64=$C5
+        lda #$C4
         sta SPR_PTR                 ; Sprite 0 = right-pointing triangle
-        lda #$C1
+        lda #$C5
         sta SPR_PTR+1               ; Sprite 1 = left-pointing triangle
 
         ; Sprite positions — vertically centered
@@ -795,6 +798,24 @@ config_screen:
         inx
         bne @in5
 @in5d:
+        ; Row 6: show "PAL" or "NTSC"
+        lda is_ntsc
+        bne @show_ntsc
+        ldx #0
+@pal_l: lda @str_pal, x
+        beq @sys_done
+        sta SCREEN + 6*40 + 2, x
+        inx
+        bne @pal_l
+        beq @sys_done
+@show_ntsc:
+        ldx #0
+@ntsc_l: lda @str_ntsc, x
+        beq @sys_done
+        sta SCREEN + 6*40 + 2, x
+        inx
+        bne @ntsc_l
+@sys_done:
 
         ; Set all color RAM to white
         lda #WHITE
@@ -859,6 +880,10 @@ config_screen:
         .byte sc_F,$33,__,$3D,__,sc_E,sc_D,sc_I,sc_T,sc_O,sc_R,0
 @str_title:
         .byte sc_Q,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,__,$36,$34,0
+@str_pal:
+        .byte sc_S,sc_Y,sc_S,sc_T,sc_E,sc_M,$3A,__,sc_P,sc_A,sc_L,0
+@str_ntsc:
+        .byte sc_S,sc_Y,sc_S,sc_T,sc_E,sc_M,$3A,__,sc_N,sc_T,sc_S,sc_C,0
 
 
 ; ---- Display float as "N.NN" -----------------------------------------------
@@ -1508,6 +1533,34 @@ scroll_screen_down:
         rts
 
 
+; ---- Detect PAL or NTSC ---------------------------------------------------
+; Sets is_ntsc: 0=PAL (312 lines/frame, 50fps), 1=NTSC (263 lines/frame, 60fps).
+; Method: wait for raster >= 256, then check if it reaches line 264+.
+; PAL raster goes up to 311 (low byte 55); NTSC only to 262 (low byte 6).
+; ---------------------------------------------------------------------------
+detect_pal_ntsc:
+        ; Wait for raster to be in top half (bit 8 of raster = 0)
+:       bit VIC_CTRL1
+        bmi :-
+        ; Wait for raster >= 256 (bit 8 = 1, stored in bit 7 of $D011)
+:       bit VIC_CTRL1
+        bpl :-
+        ; Poll: can raster low byte reach 8+? (i.e., raster line >= 264)
+:       lda VIC_RASTER
+        cmp #8
+        bcs @pal                    ; low byte >= 8 → raster 264+ → PAL
+        bit VIC_CTRL1
+        bmi :-                      ; still in 256+ range, keep checking
+        ; Raster wrapped before reaching 264 → NTSC
+        lda #1
+        sta is_ntsc
+        rts
+@pal:
+        lda #0
+        sta is_ntsc
+        rts
+
+
 ; ---- Build velocity lookup table -------------------------------------------
 ; Computes velocity_table[step] = baseSpeed * step^curvature * 256
 ; using BASIC ROM floating-point routines.
@@ -1545,6 +1598,14 @@ build_velocity_table:
         lda #<cfg_base_speed
         ldy #>cfg_base_speed
         jsr FMULT
+
+        ; On NTSC (60fps), scale by 5/6 to match PAL (50fps) scroll speed
+        lda is_ntsc
+        beq @not_ntsc
+        lda #<fp_ntsc_scale
+        ldy #>fp_ntsc_scale
+        jsr FMULT
+@not_ntsc:
 
         ; FAC *= 256 (convert to 8.8 fixed-point units)
         lda #<fp_256
@@ -3897,6 +3958,11 @@ render_retreat_bot:
         rts
 
 ; ---------------------------------------------------------------------------
+;  PAL/NTSC detection result (0=PAL, 1=NTSC)
+; ---------------------------------------------------------------------------
+is_ntsc:        .byte 0
+
+; ---------------------------------------------------------------------------
 ;  Velocity lookup table — computed at startup by build_velocity_table
 ;  10 entries (steps 0-9), 8.8 fixed-point format
 ; ---------------------------------------------------------------------------
@@ -4000,6 +4066,7 @@ fp_0_15:        .byte $7E,$19,$99,$99,$9A       ; 0.15 (initial baseSpeed)
 fp_0_50:        .byte $80,$00,$00,$00,$00       ; 0.50 (min curvature / rounding)
 fp_2_0:         .byte $82,$00,$00,$00,$00       ; 2.0 (max curvature)
 fp_4_0:         .byte $83,$00,$00,$00,$00       ; 4.0 (max baseSpeed)
+fp_ntsc_scale:  .byte $80,$55,$55,$55,$55       ; 5/6 ≈ 0.8333 (NTSC 60fps→PAL 50fps)
 fp_100:         .byte $87,$48,$00,$00,$00       ; 100.0 (for N.NN display)
 
 ; Page address table: page_addr[N] = doc_buffer + N * 960
