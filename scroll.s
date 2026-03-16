@@ -305,6 +305,16 @@ enter_scroll_mode:
         jmp @esm_install_irq
 
 @esm_install_irq:
+        ; Set reverse scroll floor to current position
+        lda rows_from_start_lo
+        sta reverse_floor_lo
+        lda rows_from_start_hi
+        sta reverse_floor_hi
+        ; Save initial top doc pointer for retreat clamping
+        lda rnd_top_lo
+        sta init_top_lo
+        lda rnd_top_hi
+        sta init_top_hi
         ; ---- Install raster IRQ chain ----
         lda #$7F
         sta CIA1_ICR                ; disable CIA timer IRQs
@@ -1286,12 +1296,17 @@ scroll_screen_up:
 ; text data from text_ptr - 25*COLS.  Decrements text_ptr with wrapping.
 ; ---------------------------------------------------------------------------
 scroll_screen_down:
-        ; Boundary check: if already at the starting position, snap fine
+        ; Boundary check: if rows_from_start <= reverse_floor, snap fine
         ; scroll to 7, zero velocity, and return without moving.
-        lda rows_from_start_lo
-        bne @ssd_ok
         lda rows_from_start_hi
-        bne @ssd_ok
+        cmp reverse_floor_hi
+        bcc @ssd_at_floor           ; hi < floor_hi → at/below floor
+        bne @ssd_ok                 ; hi > floor_hi → allow
+        lda rows_from_start_lo
+        cmp reverse_floor_lo
+        beq @ssd_at_floor           ; equal → at floor
+        bcs @ssd_ok                 ; lo > floor_lo → allow
+@ssd_at_floor:
         lda #7
         sta fine_scroll
         ora #%00010000              ; DEN | YSCROLL=7
@@ -3880,9 +3895,10 @@ render_retreat_top:
         rts
 @rrt_clamp:
         ; Re-entering blank region above content: restore skip counter,
-        ; reset doc pointers to document start, and clear the linebuf so
-        ; that stale content from a prematurely rendered line 0 doesn't
-        ; appear as duplicate text in the blank area.
+        ; reset doc pointers to initial top position, and clear the linebuf
+        ; so that stale content doesn't appear as duplicate text in the
+        ; blank area.  Uses init_top (set at scroll entry) instead of
+        ; scroll_start so that F5 resume / F3 jump positions are respected.
         lda rnd_top_skip
         cmp #4
         beq @rrt_skip_ok
@@ -3890,11 +3906,12 @@ render_retreat_top:
 @rrt_skip_ok:
         lda #2                      ; retreat to tile row 2 of previous blank line
         sta rnd_top_row
-        ; Reset doc pointers so the next skip-reaching-0 render produces line 0
-        lda scroll_start_lo
+        ; Reset doc pointers so the next skip-reaching-0 render produces
+        ; the initial top line (line 0 for fresh start, line L for resume)
+        lda init_top_lo
         sta rnd_top_lo
         sta rnd_top_next_lo
-        lda scroll_start_hi
+        lda init_top_hi
         sta rnd_top_hi
         sta rnd_top_next_hi
         ; Clear linebuf (blank tile-line)
@@ -4619,3 +4636,7 @@ scroll_has_saved:  .res 1        ; nonzero = saved position is valid
 scroll_entry_mode: .res 1        ; 0=fresh, 1=F5 resume, 2=F3 jump-to-cursor
 target_rows_lo:    .res 1        ; target rows_from_start for positioning
 target_rows_hi:    .res 1
+reverse_floor_lo:  .res 1        ; minimum rows_from_start (reverse scroll limit)
+reverse_floor_hi:  .res 1
+init_top_lo:       .res 1        ; doc ptr of first rendered line at scroll entry
+init_top_hi:       .res 1
