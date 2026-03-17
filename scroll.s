@@ -2022,7 +2022,31 @@ ed_del_key:
 ed_cursor_up:
         jsr undraw_cursor
         lda cursor_y
-        beq @ecu_done
+        bne @ecu_same_page
+        ; At row 0 — try to go to previous page
+        lda current_page
+        beq @ecu_done               ; already at page 0, nowhere to go
+        jsr save_editor_page
+        ; Trim empty last page (same logic as ed_prev_page)
+        lda current_page
+        clc
+        adc #1
+        cmp total_pages
+        bne @ecu_no_trim
+        lda total_pages
+        cmp #2
+        bcc @ecu_no_trim
+        jsr check_page_empty
+        bcc @ecu_no_trim
+        dec total_pages
+@ecu_no_trim:
+        dec current_page
+        jsr load_editor_page
+        jsr draw_status_bar
+        lda #23
+        sta cursor_y                ; cursor to last row
+        jmp @ecu_done
+@ecu_same_page:
         dec cursor_y
 @ecu_done:
         jsr draw_cursor
@@ -2032,7 +2056,35 @@ ed_cursor_down:
         jsr undraw_cursor
         lda cursor_y
         cmp #23
-        bcs @ecd_done
+        bcc @ecd_same_page
+        ; At row 23 — try to go to next page
+        lda current_page
+        clc
+        adc #1
+        cmp total_pages
+        bcc @ecd_has_next           ; next page exists
+        ; At last page — can we add a new one?
+        lda total_pages
+        cmp #10
+        bcs @ecd_done               ; already 10 pages, can't go further
+        ; Add new blank page
+        inc total_pages
+        ldx total_pages
+        dex
+        lda page_addr_lo, x
+        sta zp_dst
+        lda page_addr_hi, x
+        sta zp_dst+1
+        jsr fill_page_spaces
+@ecd_has_next:
+        jsr save_editor_page
+        inc current_page
+        jsr load_editor_page
+        jsr draw_status_bar
+        lda #0
+        sta cursor_y                ; cursor to first row
+        jmp @ecd_done
+@ecd_same_page:
         inc cursor_y
 @ecd_done:
         jsr draw_cursor
