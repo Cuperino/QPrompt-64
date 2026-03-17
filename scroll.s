@@ -4377,13 +4377,13 @@ spr_left_tri:   ; at $3040
 ;  32  n-tl-diag  33 n-mc-diag  34 n-br-diag
 ;  35  top-r-bar  36 bot-r-bar  37 bot-l-bar
 ;
-;  Padding: 2px margin top/bottom, 1px margin left/right of each glyph.
+;  Padding: 3px top / 2px bottom, 1px margin left/right of each glyph.
 ;  Horizontal values: $70=01110000 (left 3px, 1px L-margin)
 ;                     $0E=00001110 (right 3px, 1px R-margin)
 ;                     $7E=01111110 (full bar, 1px L+R margins)
 ;                     $38=00111000 (centre 3px)
-;  Vertical: top-tiles have rows 0-1 blank (2px top gap);
-;            bot-tiles have row 7 blank (1px bottom gap).
+;  Vertical: top-tiles have rows 0-2 blank (3px top gap);
+;            bot-tiles have rows 6-7 blank (2px bottom gap).
 ;            Mid-tiles carry strokes through all 8 rows (no inner gap).
 ; =============================================================================
 .segment "CHARSET"
@@ -4391,14 +4391,14 @@ spr_left_tri:   ; at $3040
 ; T0 — blank
 .byte $00,$00,$00,$00,$00,$00,$00,$00
 
-; T1 — top-left corner  (2px top pad, 2-row full bar, 4-row left vert, rounded)
-.byte $00,$00,$3F,$7F,$70,$70,$70,$70
+; T1 — top-left corner  (3px top pad, 2-row full bar, 3-row left vert, rounded)
+.byte $00,$00,$00,$3F,$7F,$70,$70,$70
 
-; T2 — top-center  (2px top pad, 2-row top bar, blank below)
-.byte $00,$00,$7E,$7E,$00,$00,$00,$00
+; T2 — top-center  (3px top pad, 2-row top bar, blank below)
+.byte $00,$00,$00,$7E,$7E,$00,$00,$00
 
-; T3 — top-right corner  (2px top pad, 2-row full bar, 4-row right vert, rounded)
-.byte $00,$00,$FC,$FE,$0E,$0E,$0E,$0E
+; T3 — top-right corner  (3px top pad, 2-row full bar, 3-row right vert, rounded)
+.byte $00,$00,$00,$FC,$FE,$0E,$0E,$0E
 
 ; T4 — left vertical  (left 3px with 1px L-margin, full 8 rows)
 .byte $70,$70,$70,$70,$70,$70,$70,$70
@@ -4406,14 +4406,14 @@ spr_left_tri:   ; at $3040
 ; T5 — right vertical  (right 3px with 1px R-margin, full 8 rows)
 .byte $0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E
 
-; T6 — bot-left corner  (5-row left vert, 2-row full bar, 1px bot pad, rounded)
-.byte $70,$70,$70,$70,$70,$7F,$3F,$00
+; T6 — bot-left corner  (4-row left vert, 2-row full bar, 2px bot pad, rounded)
+.byte $70,$70,$70,$70,$7F,$3F,$00,$00
 
-; T7 — bot-center  (5-row blank, 2-row bot bar, 1px bot pad)
-.byte $00,$00,$00,$00,$00,$7E,$7E,$00
+; T7 — bot-center  (4-row blank, 2-row bot bar, 2px bot pad)
+.byte $00,$00,$00,$00,$7E,$7E,$00,$00
 
-; T8 — bot-right corner  (5-row right vert, 2-row full bar, 1px bot pad, rounded)
-.byte $0E,$0E,$0E,$0E,$0E,$FE,$FC,$00
+; T8 — bot-right corner  (4-row right vert, 2-row full bar, 2px bot pad, rounded)
+.byte $0E,$0E,$0E,$0E,$FE,$FC,$00,$00
 
 ; T9 — hmid-left  (left vert rows 0-1, full midbar rows 2-4, left vert rows 5-7)
 .byte $70,$70,$7F,$7F,$7F,$70,$70,$70
@@ -4427,18 +4427,18 @@ spr_left_tri:   ; at $3040
 ; T12 — center vertical  (centre 3px $38=00111000, full 8 rows)
 .byte $38,$38,$38,$38,$38,$38,$38,$38
 
-; T13 — center dot  (centre 3px, rows 4-6, 1px bot pad)
-.byte $00,$00,$00,$00,$38,$38,$38,$00
+; T13 — center dot  (centre 3px, rows 3-5, 2px bot pad)
+.byte $00,$00,$00,$38,$38,$38,$00,$00
 
 ; T14 — mid-close-right (right vert rows 0-1, bar rows 2-4, blank rows 5-7, rounded)
 ;        used in mid-row right of P where nothing continues below
 .byte $0E,$0E,$FE,$FE,$FC,$00,$00,$00
 
-; T15 — top-left-vert (2px top gap, then left vert — matches top-gap of T1/T2/T3)
-.byte $00,$00,$70,$70,$70,$70,$70,$70
+; T15 — top-left-vert (3px top gap, then left vert — matches top-gap of T1/T2/T3)
+.byte $00,$00,$00,$70,$70,$70,$70,$70
 
-; T16 — top-right-vert (2px top gap, then right vert — matches top-gap of T1/T2/T3)
-.byte $00,$00,$0E,$0E,$0E,$0E,$0E,$0E
+; T16 — top-right-vert (3px top gap, then right vert — matches top-gap of T1/T2/T3)
+.byte $00,$00,$00,$0E,$0E,$0E,$0E,$0E
 
 ; T17 — hmid-left-close-bot (left vert rows 0-1, bar rows 2-3, rounded row 4, blank 5-7)
 ;        used in mid-row left where vert ends and bar extends right (S, 9)
@@ -4448,21 +4448,21 @@ spr_left_tri:   ; at $3040
 ;        used in mid-row right where bar meets vert below (S, G)
 .byte $00,$00,$FC,$FE,$FE,$0E,$0E,$0E
 
-; T19 — top-center-T (2px top pad, 2-row full bar, 4-row center vert)
+; T19 — top-center-T (3px top pad, 2-row full bar, 3-row center vert)
 ;        T-shape junction: full-width bar with stem descending (I top, T top)
-.byte $00,$00,$C7,$FF,$38,$38,$38,$38
+.byte $00,$00,$00,$C7,$FF,$38,$38,$38
 
-; T20 — bot-center-invT (5-row center vert, 2-row full bar, 1px bot pad)
+; T20 — bot-center-invT (4-row center vert, 2-row full bar, 2px bot pad)
 ;        inverted-T junction: stem ascending into full-width bar (I bot, 1 bot)
-.byte $38,$38,$38,$38,$38,$FF,$C7,$00
+.byte $38,$38,$38,$38,$FF,$C7,$00,$00
 
-; T21 — top-left-square (2px top pad, 2-row full bar, 4-row left vert, sharp corner)
+; T21 — top-left-square (3px top pad, 2-row full bar, 3-row left vert, sharp corner)
 ;        non-rounded version of T1 for D, R
-.byte $00,$00,$7F,$7F,$70,$70,$70,$70
+.byte $00,$00,$00,$7F,$7F,$70,$70,$70
 
-; T22 — bot-left-square (5-row left vert, 2-row full bar, 1px bot pad, sharp corner)
+; T22 — bot-left-square (4-row left vert, 2-row full bar, 2px bot pad, sharp corner)
 ;        non-rounded version of T6 for D
-.byte $70,$70,$70,$70,$70,$7F,$7F,$00
+.byte $70,$70,$70,$70,$7F,$7F,$00,$00
 
 ; T23 — diagonal TL-BR (4px stroke from top-left to bottom-right, full width)
 ;        used in N, Z, X, Y corners
@@ -4480,21 +4480,21 @@ spr_left_tri:   ; at $3040
 ;        Y-axis mirror of T23, used in X, Y corners
 .byte $00,$07,$0F,$1E,$3C,$78,$F0,$E0
 
-; T27 — U-shape (3px left+right verts to tile edges, rounded bottom bar, 1px bot pad)
+; T27 — U-shape (3px left+right verts to tile edges, rounded bottom bar, 2px bot pad)
 ;        used in bot-center of V
-.byte $E7,$E7,$E7,$E7,$E7,$7E,$3C,$00
+.byte $E7,$E7,$E7,$E7,$7E,$3C,$00,$00
 
-; T28 — top-center-wide (2px top pad, 2-row full-width bar, blank below)
+; T28 — top-center-wide (3px top pad, 2-row full-width bar, blank below)
 ;        full-width version of T2 for center column
-.byte $00,$00,$FF,$FF,$00,$00,$00,$00
+.byte $00,$00,$00,$FF,$FF,$00,$00,$00
 
 ; T29 — hmid-center-wide (blank rows 0-1, 3-row full-width bar, blank rows 5-7)
 ;        full-width version for center column
 .byte $00,$00,$FF,$FF,$FF,$00,$00,$00
 
-; T30 — bot-center-wide (5-row blank, 2-row full-width bar, 1px bot pad)
+; T30 — bot-center-wide (4-row blank, 2-row full-width bar, 2px bot pad)
 ;        full-width version of T7 for center column
-.byte $00,$00,$00,$00,$00,$FF,$FF,$00
+.byte $00,$00,$00,$00,$FF,$FF,$00,$00
 
 ; T31 — N top-left (45° diagonal TL-BR + left vert, rounded top-left)
 ;        diagonal merges with left vert connecting to tile below
@@ -4508,21 +4508,21 @@ spr_left_tri:   ; at $3040
 ;        diagonal merges with right vert connecting to tile above
 .byte $EE,$7E,$3E,$1E,$0E,$0E,$0E,$0C
 
-; T34 — top-right-bar (2px top pad, 2-row bar extended left, blank below)
+; T34 — top-right-bar (3px top pad, 2-row bar extended left, blank below)
 ;        like T2 but bar extends to col 0
-.byte $00,$00,$FE,$FE,$00,$00,$00,$00
+.byte $00,$00,$00,$FE,$FE,$00,$00,$00
 
-; T35 — bot-right-bar (5-row blank, 2-row bar extended left, 1px bot pad)
+; T35 — bot-right-bar (4-row blank, 2-row bar extended left, 2px bot pad)
 ;        like T7 but bar extends to col 0
-.byte $00,$00,$00,$00,$00,$FE,$FE,$00
+.byte $00,$00,$00,$00,$FE,$FE,$00,$00
 
-; T36 — bot-left-bar (5-row blank, 2-row bar extended right, 1px bot pad)
+; T36 — bot-left-bar (4-row blank, 2-row bar extended right, 2px bot pad)
 ;        like T7 but bar extends to col 7
-.byte $00,$00,$00,$00,$00,$7F,$7F,$00
+.byte $00,$00,$00,$00,$7F,$7F,$00,$00
 
-; T37 — top-left-bar (2px top pad, 2-row bar extended right, 4-row blank)
+; T37 — top-left-bar (3px top pad, 2-row bar extended right, 3-row blank)
 ;        like T2 but bar extends to col 7
-.byte $00,$00,$7F,$7F,$00,$00,$00,$00
+.byte $00,$00,$00,$7F,$7F,$00,$00,$00
 
 ; T38 — hmid-right-notch (like T10 but col 6 removed from bar rows 2-4 only)
 ;        used in mid-row right of R, B — notch aligns with mid-center bar
