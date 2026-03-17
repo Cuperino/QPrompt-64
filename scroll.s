@@ -295,6 +295,8 @@ enter_scroll_mode:
         beq @esm_resume
         cmp #2
         beq @esm_f3
+        cmp #3
+        beq @esm_direct_target
         ; Mode 0: fresh start
         jsr render_init
         jmp @esm_install_irq
@@ -312,6 +314,7 @@ enter_scroll_mode:
 @esm_f3:
         ; F3: jump to cursor position
         jsr compute_f3_target
+@esm_direct_target:
         jsr clamp_target_rows
         jsr render_init_at_position
         jmp @esm_install_irq
@@ -371,10 +374,14 @@ enter_scroll_mode:
         jsr scroll_screen_down
         jmp @forever
 @exit_scroll:
-        ; enter_config: 1=F1 (config), 2=F3 (editor), 3=Ctrl+T (reset)
+        ; enter_config: 1=F1, 2=F3, 3=Ctrl+T, 4=search prev #, 5=search next #
         lda enter_config
         cmp #3
         beq @scroll_reset
+        cmp #4
+        beq @search_prev_hash
+        cmp #5
+        beq @search_next_hash
         ; Save scroll position for F5 resume
         lda rows_from_start_lo
         sta saved_rows_lo
@@ -411,6 +418,41 @@ enter_scroll_mode:
         sta scroll_has_saved
         sta scroll_entry_mode       ; fresh start
         jsr disable_raster_restore_kernal
+        jmp enter_scroll_mode
+
+@search_prev_hash:
+        ; --- Comma/<: search backward for previous # ---
+        lda #0
+        sta enter_config
+        jsr disable_raster_restore_kernal
+        jsr search_hash_prev        ; sets target_rows_lo/hi
+        lda #3
+        sta scroll_entry_mode       ; direct target positioning
+        jmp enter_scroll_mode
+
+@search_next_hash:
+        ; --- Period/>: search forward for next # ---
+        ; Save current position in case search fails
+        lda rows_from_start_lo
+        sta saved_rows_lo
+        lda rows_from_start_hi
+        sta saved_rows_hi
+        lda fine_scroll
+        sta saved_fine_scroll
+        lda #1
+        sta scroll_has_saved
+        lda #0
+        sta enter_config
+        jsr disable_raster_restore_kernal
+        jsr search_hash_next
+        bcc @snh_found
+        ; Not found — resume at current position
+        lda #1
+        sta scroll_entry_mode       ; F5 resume
+        jmp enter_scroll_mode
+@snh_found:
+        lda #3
+        sta scroll_entry_mode       ; direct target positioning
         jmp enter_scroll_mode
 
 @scroll_to_editor:
@@ -1611,7 +1653,9 @@ read_keyboard:
 @check_key:
         lda CURR_KEY                ; current key matrix code
         cmp #$40                    ; no key pressed
-        beq @rk_done
+        bne @has_key
+        rts
+@has_key:
 
         ; Check for F1 (matrix code $04) → enter config
         cmp #$04
@@ -1637,6 +1681,20 @@ read_keyboard:
         sta enter_config            ; 3 = reset to start
         rts
 @not_ctrl_t:
+        ; Check for comma/< (matrix code $2F) → search previous #
+        cmp #$2F
+        bne @not_comma
+        lda #4
+        sta enter_config            ; 4 = search previous #
+        rts
+@not_comma:
+        ; Check for period/> (matrix code $2C) → search next #
+        cmp #$2C
+        bne @not_period
+        lda #5
+        sta enter_config            ; 5 = search next #
+        rts
+@not_period:
         ; Compare against number key matrix codes
         cmp #$38                    ; key "1" → step 0 (still)
         bne @not1
@@ -3383,8 +3441,15 @@ compute_f3_target:
         inc cf3_cursor_hi
 @cf3_no_carry2:
         ; cf3_cursor_lo/hi = absolute doc_buffer address of cursor
+        jmp find_line_for_addr      ; tail call
 
-        ; Iterate rendered lines from scroll_start
+; ---------------------------------------------------------------------------
+;  find_line_for_addr
+;  Given a doc_buffer address in cf3_cursor_lo/hi, iterates rendered lines
+;  from scroll_start to find which line contains it.
+;  Sets target_rows_lo/hi = rendered_line_number * 3.
+; ---------------------------------------------------------------------------
+find_line_for_addr:
         lda scroll_start_lo
         sta zp_src
         lda scroll_start_hi
@@ -3393,38 +3458,36 @@ compute_f3_target:
         sta cf3_line_lo
         sta cf3_line_hi
 
-@cf3_loop:
-        ; Render to scratch (rnd_bot_linebuf) — advances zp_src past this line
+@fla_loop:
         lda #<rnd_bot_linebuf
         sta zp_dst
         lda #>rnd_bot_linebuf
         sta zp_dst+1
         jsr render_compute_line
 
-        ; Check if cursor_addr < zp_src (i.e., cursor is within this line)
+        ; Check if cursor_addr < zp_src (i.e., addr is within this line)
         lda cf3_cursor_hi
         cmp zp_src+1
-        bcc @cf3_found              ; cursor_hi < line_end_hi → found
-        bne @cf3_next               ; cursor_hi > line_end_hi → not yet
+        bcc @fla_found
+        bne @fla_next
         lda cf3_cursor_lo
         cmp zp_src
-        bcc @cf3_found              ; cursor_lo < line_end_lo → found
+        bcc @fla_found
 
-@cf3_next:
+@fla_next:
         inc cf3_line_lo
-        bne @cf3_check_bounds
+        bne @fla_check_bounds
         inc cf3_line_hi
-@cf3_check_bounds:
-        ; Check if zp_src >= scroll_end → use current line as fallback
+@fla_check_bounds:
         lda zp_src+1
         cmp scroll_end_hi
-        bcc @cf3_loop
-        bne @cf3_found
+        bcc @fla_loop
+        bne @fla_found
         lda zp_src
         cmp scroll_end_lo
-        bcc @cf3_loop
+        bcc @fla_loop
 
-@cf3_found:
+@fla_found:
         ; target_rows = cf3_line * 3 (line*2 + line)
         lda cf3_line_lo
         asl
@@ -3446,6 +3509,149 @@ cf3_cursor_hi: .byte 0
 cf3_line_lo:   .byte 0
 cf3_line_hi:   .byte 0
 cf3_tmp:       .byte 0, 0
+
+; ---------------------------------------------------------------------------
+;  find_center_doc_ptr
+;  Fast-forwards through rows_from_start/3 rendered lines from scroll_start.
+;  On return, zp_src = doc_buffer address of the start of the center line.
+; ---------------------------------------------------------------------------
+find_center_doc_ptr:
+        lda rows_from_start_lo
+        sta target_rows_lo
+        lda rows_from_start_hi
+        sta target_rows_hi
+        jsr divide_by_3
+        ; riap_quotient_lo/hi = number of rendered lines to skip
+
+        lda scroll_start_lo
+        sta zp_src
+        lda scroll_start_hi
+        sta zp_src+1
+
+@fcdp_loop:
+        lda riap_quotient_lo
+        ora riap_quotient_hi
+        beq @fcdp_done
+        lda #<rnd_bot_linebuf
+        sta zp_dst
+        lda #>rnd_bot_linebuf
+        sta zp_dst+1
+        jsr render_compute_line
+        lda riap_quotient_lo
+        bne @fcdp_dec
+        dec riap_quotient_hi
+@fcdp_dec:
+        dec riap_quotient_lo
+        jmp @fcdp_loop
+@fcdp_done:
+        ; zp_src = start of center line in doc_buffer
+        rts
+
+; ---------------------------------------------------------------------------
+;  search_hash_prev
+;  Searches backward from the end of the line before the center line for #.
+;  Sets target_rows_lo/hi to the found line, or 0 (start) if not found.
+; ---------------------------------------------------------------------------
+search_hash_prev:
+        jsr find_center_doc_ptr     ; zp_src = start of center line
+
+        ; Check if we're already at scroll_start (no previous line)
+        lda zp_src+1
+        cmp scroll_start_hi
+        bne @shp_has_prev
+        lda zp_src
+        cmp scroll_start_lo
+        beq @shp_not_found          ; at start, no previous line
+@shp_has_prev:
+        ; Decrement to last byte of previous line
+        lda zp_src
+        bne :+
+        dec zp_src+1
+:       dec zp_src
+
+@shp_loop:
+        ; Check bounds: zp_src < scroll_start → not found
+        lda zp_src+1
+        cmp scroll_start_hi
+        bcc @shp_not_found
+        bne @shp_check
+        lda zp_src
+        cmp scroll_start_lo
+        bcc @shp_not_found
+@shp_check:
+        ldy #0
+        lda (zp_src), y
+        cmp #$23                    ; # screen code
+        beq @shp_found
+        ; Decrement pointer
+        lda zp_src
+        bne :+
+        dec zp_src+1
+:       dec zp_src
+        jmp @shp_loop
+
+@shp_found:
+        ; Store address for line lookup
+        lda zp_src
+        sta cf3_cursor_lo
+        lda zp_src+1
+        sta cf3_cursor_hi
+        jmp find_line_for_addr      ; sets target_rows, returns
+
+@shp_not_found:
+        ; No # found — go to start of document
+        lda #0
+        sta target_rows_lo
+        sta target_rows_hi
+        rts
+
+; ---------------------------------------------------------------------------
+;  search_hash_next
+;  Searches forward from the start of the line after the center line for #.
+;  Sets target_rows_lo/hi if found (carry clear), carry set if not found.
+; ---------------------------------------------------------------------------
+search_hash_next:
+        jsr find_center_doc_ptr     ; zp_src = start of center line
+
+        ; Advance past center line to get start of next line
+        lda #<rnd_bot_linebuf
+        sta zp_dst
+        lda #>rnd_bot_linebuf
+        sta zp_dst+1
+        jsr render_compute_line     ; zp_src = start of next line
+
+@shn_loop:
+        ; Check bounds: zp_src >= scroll_end → not found
+        lda zp_src+1
+        cmp scroll_end_hi
+        bcc @shn_check
+        bne @shn_not_found
+        lda zp_src
+        cmp scroll_end_lo
+        bcs @shn_not_found
+@shn_check:
+        ldy #0
+        lda (zp_src), y
+        cmp #$23                    ; # screen code
+        beq @shn_found
+        ; Increment pointer
+        inc zp_src
+        bne @shn_loop
+        inc zp_src+1
+        jmp @shn_loop
+
+@shn_found:
+        lda zp_src
+        sta cf3_cursor_lo
+        lda zp_src+1
+        sta cf3_cursor_hi
+        jsr find_line_for_addr      ; sets target_rows
+        clc                         ; found
+        rts
+
+@shn_not_found:
+        sec                         ; not found
+        rts
 
 ; ---------------------------------------------------------------------------
 ;  count_rendered_lines
