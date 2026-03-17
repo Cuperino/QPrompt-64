@@ -5085,7 +5085,7 @@ spr_left_tri:   ; at $3040
 .segment "BSS"
 
 save_header:    .res 1              ; total_pages (saved to disk as first byte)
-doc_buffer:     .res 9600           ; 10 pages × 960 bytes (24 rows × 40 cols)
+doc_buffer:     .res 9600 + 1000    ; 10 pages × 960 bytes + 1000 scroll trail
 
 ; ---------------------------------------------------------------------------
 ;  Render engine state — large-character scroll mode
