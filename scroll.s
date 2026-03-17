@@ -4423,15 +4423,15 @@ text_data_end:
 
 ; =============================================================================
 ;  Render engine RODATA
-;  tile_char_idx[128] — maps C64 screen codes $00-$7F to tile set index (0-44)
-;  Screen codes: A-Z=$01-$1A, space=$20, 0-9=$30-$39
-;  Punctuation: ,=$2C .=$2E !=$21 ?=$3F -=$2D :=$3A '=$27 #=$23
+;  tile_char_idx[128] — maps C64 screen codes $00-$7F to tile set index (0-50)
+;  Screen codes: @=$00, A-Z=$01-$1A, \=$1C, space=$20, 0-9=$30-$39
+;  Punctuation: !=$21 "=$22 #=$23 $=$24 %=$25 '=$27 ,=$2C -=$2D .=$2E /=$2F :=$3A ?=$3F
 ; =============================================================================
 tile_char_idx:
 ;       $x0 $x1 $x2 $x3 $x4 $x5 $x6 $x7 $x8 $x9 $xA $xB $xC $xD $xE $xF
-.byte     0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15  ; $00-$0F (A-P)
-.byte    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,  0,  0,  0,  0,  0  ; $10-$1F (Q-Z)
-.byte     0, 39,  0, 44,  0,  0,  0, 43,  0,  0,  0,  0, 37, 41, 38,  0  ; $20-$2F (sp,!,#,',-,.,)
+.byte    48,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15  ; $00-$0F (@,A-O)
+.byte    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,  0, 50,  0,  0,  0  ; $10-$1F (P-Z,\)
+.byte     0, 39, 45, 44, 46, 47,  0, 43,  0,  0,  0,  0, 37, 41, 38, 49  ; $20-$2F (sp,!,",#,$,%,',-,.,/)
 .byte    27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 42,  0,  0,  0,  0, 40  ; $30-$3F (0-9,:=3A,?=3F)
 .byte     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0  ; $40-$4F
 .byte     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0  ; $50-$5F
@@ -4439,7 +4439,7 @@ tile_char_idx:
 .byte     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0  ; $70-$7F
 
 ; =============================================================================
-;  tile_sets[44][9] — 9 tile indices (top-l,top-c,top-r,mid-l,mid-c,mid-r,
+;  tile_sets[51][9] — 9 tile indices (top-l,top-c,top-r,mid-l,mid-c,mid-r,
 ;                                      bot-l,bot-c,bot-r) per character
 ;  Tile index vocabulary:
 ;   0=blank  1=top-left  2=top-ctr  3=top-right
@@ -4537,6 +4537,18 @@ tile_sets:
 .byte  0,13, 0,  0, 0, 0,  0, 0, 0
 ; Set 44 #: two horiz bars crossing two verticals
 .byte  9,29,10,  4, 0, 5,  9,29,10
+; Set 45 ": double-quote ticks at top-center
+.byte  0,40, 0,  0, 0, 0,  0, 0, 0
+; Set 46 $: S-shape with vertical stroke through center
+.byte  1,19,34, 17,39,18, 36,20, 8
+; Set 47 %: dots at TL/BR with forward-slash diagonal
+.byte 13, 0,26,  0,26, 0, 26, 0,13
+; Set 48 @: frame with inner loop, open bottom-right
+.byte  1,28, 3,  4,29,18,  6,30, 0
+; Set 49 /: forward-slash diagonal (TR to BL)
+.byte  0, 0,26,  0,26, 0, 26, 0, 0
+; Set 50 \: backslash diagonal (TL to BR)
+.byte 23, 0, 0,  0,23, 0,  0, 0,23
 
 ; Precomputed pointers into tile_sets (lo and hi bytes)
 tile_off_lo:
@@ -4551,7 +4563,8 @@ tile_off_lo:
 .byte <(tile_sets + 32*9), <(tile_sets + 33*9), <(tile_sets + 34*9), <(tile_sets + 35*9)
 .byte <(tile_sets + 36*9), <(tile_sets + 37*9), <(tile_sets + 38*9), <(tile_sets + 39*9)
 .byte <(tile_sets + 40*9), <(tile_sets + 41*9), <(tile_sets + 42*9), <(tile_sets + 43*9)
-.byte <(tile_sets + 44*9)
+.byte <(tile_sets + 44*9), <(tile_sets + 45*9), <(tile_sets + 46*9), <(tile_sets + 47*9)
+.byte <(tile_sets + 48*9), <(tile_sets + 49*9), <(tile_sets + 50*9)
 
 tile_off_hi:
 .byte >(tile_sets +  0*9), >(tile_sets +  1*9), >(tile_sets +  2*9), >(tile_sets +  3*9)
@@ -4565,7 +4578,8 @@ tile_off_hi:
 .byte >(tile_sets + 32*9), >(tile_sets + 33*9), >(tile_sets + 34*9), >(tile_sets + 35*9)
 .byte >(tile_sets + 36*9), >(tile_sets + 37*9), >(tile_sets + 38*9), >(tile_sets + 39*9)
 .byte >(tile_sets + 40*9), >(tile_sets + 41*9), >(tile_sets + 42*9), >(tile_sets + 43*9)
-.byte >(tile_sets + 44*9)
+.byte >(tile_sets + 44*9), >(tile_sets + 45*9), >(tile_sets + 46*9), >(tile_sets + 47*9)
+.byte >(tile_sets + 48*9), >(tile_sets + 49*9), >(tile_sets + 50*9)
 
 ; =============================================================================
 ;  Sprite data at $3700 — dedicated SPRITES segment
@@ -4637,7 +4651,8 @@ spr_left_tri:   ; at $3040
 ;  26  y-junction 27 diag-trbl  28 u-shape
 ;  29  top-ctr-w  30 hmid-ctr-w 31 bot-ctr-w
 ;  32  n-tl-diag  33 n-mc-diag  34 n-br-diag
-;  35  top-r-bar  36 bot-r-bar  37 bot-l-bar
+;  35  top-r-bar  36 bot-r-bar  37 bot-l-bar  38 hmid-r-notch
+;  39  cvert+midbar  40 dquote-ticks
 ;
 ;  Padding: 3px top / 2px bottom, 1px margin left/right of each glyph.
 ;  Horizontal values: $70=01110000 (left 3px, 1px L-margin)
@@ -4790,8 +4805,16 @@ spr_left_tri:   ; at $3040
 ;        used in mid-row right of R, B — notch aligns with mid-center bar
 .byte $0E,$3E,$FC,$FC,$FC,$3E,$0E,$0E
 
-; T39-T255 zero-filled to reach 256 tiles
-.res (256-39)*8, 0
+; T39 — center-vert-plus-midbar (center 3px vert all rows + full-width bar rows 2-4)
+;        used in center of $ (S-shape with vertical stroke)
+.byte $38,$38,$FF,$FF,$FF,$38,$38,$38
+
+; T40 — double-quote ticks (two 2px-wide strokes side by side, rows 3-5)
+;        used in top-center of "
+.byte $00,$00,$00,$66,$66,$66,$00,$00
+
+; T41-T255 zero-filled to reach 256 tiles
+.res (256-41)*8, 0
 
 ; =============================================================================
 ;  BSS segment — runtime-only document buffer (not stored in PRG file)
