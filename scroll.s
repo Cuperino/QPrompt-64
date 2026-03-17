@@ -236,10 +236,10 @@ enter_scroll_mode:
         sta VIC_CTRL2
 
         ; --- Set up sprites ---
-        ; Sprite data pointers: sprite 0 at $3100/64=$C4, sprite 1 at $3140/64=$C5
-        lda #$C4
+        ; Sprite data pointers: sprite 0 at $3700/64=$DC, sprite 1 at $3740/64=$DD
+        lda #$DC
         sta SPR_PTR                 ; Sprite 0 = right-pointing triangle
-        lda #$C5
+        lda #$DD
         sta SPR_PTR+1               ; Sprite 1 = left-pointing triangle
 
         ; Sprite positions — vertically centered
@@ -1208,7 +1208,7 @@ scroll_screen_up:
         lda #0
         sta fwd_limit_reached
         ldx #0
-@p0:    .repeat 8
+@p0:    .repeat 16
         lda SCREEN+COLS, x
         sta SCREEN, x
         inx
@@ -1216,7 +1216,7 @@ scroll_screen_up:
         bne @p0
 
         ldx #0
-@p1:    .repeat 8
+@p1:    .repeat 16
         lda SCREEN+COLS+256, x
         sta SCREEN+256, x
         inx
@@ -1224,7 +1224,7 @@ scroll_screen_up:
         bne @p1
 
         ldx #0
-@p2:    .repeat 8
+@p2:    .repeat 16
         lda SCREEN+COLS+512, x
         sta SCREEN+512, x
         inx
@@ -1232,7 +1232,7 @@ scroll_screen_up:
         bne @p2
 
         ldx #0
-@p3:    .repeat 8
+@p3:    .repeat 16
         lda SCREEN+COLS+744, x
         sta SCREEN+744, x
         inx
@@ -1262,25 +1262,17 @@ scroll_screen_up:
         sta zp_src+1
 @ssu_copy:
         ldy #0
-@ssu_fill:
-        .repeat 8
+        .repeat 40
         lda (zp_src), y
         sta SCREEN + (ROWS-1)*COLS, y
         iny
         .endrepeat
-        cpy #COLS
-        bne @ssu_fill
 
         ; Colour for new row = white
         lda #$0F
-        ldy #0
-@ssu_clr:
-        .repeat 8
-        sta COLRAM + (ROWS-1)*COLS, y
-        iny
+        .repeat 40, i
+        sta COLRAM + (ROWS-1)*COLS + i
         .endrepeat
-        cpy #COLS
-        bne @ssu_clr
 
         jsr render_advance_bot
         jsr render_advance_top
@@ -1338,9 +1330,9 @@ scroll_screen_down:
         .endrepeat
         bpl @save
 
-        ; ── Page 0: 8×-unrolled (256 bytes, offsets 0-255 → 40-295) ──────
+        ; ── Page 0: 16×-unrolled (256 bytes, offsets 0-255 → 40-295) ─────
         ldx #0
-@d0:    .repeat 8
+@d0:    .repeat 16
         dex
         lda SCREEN, x
         sta SCREEN+COLS, x
@@ -1353,8 +1345,11 @@ scroll_screen_down:
         bne @ssd_fill_now
 
         lda rnd_hist_count
-        beq @ssd_fill_blank
+        bne @ssd_has_hist
 
+        jmp @ssd_fill_blank
+
+@ssd_has_hist:
         ; rnd_top_row=0 with history: must retreat first to re-render,
         ; then fill.  Mark deferred.
         lda #1
@@ -1377,47 +1372,34 @@ scroll_screen_down:
         sta zp_src+1
 @ssd_fn_go:
         ldy #0
-@ssd_fn_lp:
-        .repeat 8
+        .repeat 40
         lda (zp_src), y
         sta SCREEN, y
         iny
         .endrepeat
-        cpy #COLS
-        bne @ssd_fn_lp
         lda #0
         sta ssd_fill_blank
         jmp @ssd_fill_color
 
 @ssd_fill_blank:
         lda #$00
-        ldy #0
-@ssd_fb_lp:
-        .repeat 8
-        sta SCREEN, y
-        iny
+        .repeat 40, i
+        sta SCREEN + i
         .endrepeat
-        cpy #COLS
-        bne @ssd_fb_lp
         lda #0
         sta ssd_fill_blank
 
 @ssd_fill_color:
         ; Colour for new top row = white
         lda #$0F
-        ldy #0
-@clr_top:
-        .repeat 8
-        sta COLRAM, y
-        iny
+        .repeat 40, i
+        sta COLRAM + i
         .endrepeat
-        cpy #COLS
-        bne @clr_top
 
 @ssd_page1:
-        ; ── Page 1: 8×-unrolled upper (216 bytes), 4×-unrolled lower ─────
+        ; ── Page 1: 16×-unrolled upper (216 bytes), 10×-unrolled lower ────
         ldx #255
-@d1u:   .repeat 8
+@d1u:   .repeat 16
         lda SCREEN+256, x
         sta SCREEN+256+COLS, x
         dex
@@ -1425,16 +1407,16 @@ scroll_screen_down:
         cpx #39
         bne @d1u
         ldx #39
-@d1l:   .repeat 4
+@d1l:   .repeat 10
         lda save_buf_a, x
         sta SCREEN+256+COLS, x
         dex
         .endrepeat
         bpl @d1l
 
-        ; ── Page 2: 8×-unrolled upper (216 bytes), 4×-unrolled lower ─────
+        ; ── Page 2: 16×-unrolled upper (216 bytes), 10×-unrolled lower ────
         ldx #255
-@d2u:   .repeat 8
+@d2u:   .repeat 16
         lda SCREEN+512, x
         sta SCREEN+512+COLS, x
         dex
@@ -1442,16 +1424,16 @@ scroll_screen_down:
         cpx #39
         bne @d2u
         ldx #39
-@d2l:   .repeat 4
+@d2l:   .repeat 10
         lda save_buf_b, x
         sta SCREEN+512+COLS, x
         dex
         .endrepeat
         bpl @d2l
 
-        ; ── Page 3: 8×-unrolled upper (152 bytes), 4×-unrolled lower ─────
+        ; ── Page 3: 16×-unrolled upper (152 bytes), 10×-unrolled lower ────
         ldx #191
-@d3u:   .repeat 8
+@d3u:   .repeat 16
         lda SCREEN+768, x
         sta SCREEN+768+COLS, x
         dex
@@ -1459,7 +1441,7 @@ scroll_screen_down:
         cpx #39
         bne @d3u
         ldx #39
-@d3l:   .repeat 4
+@d3l:   .repeat 10
         lda save_buf_c, x
         sta SCREEN+768+COLS, x
         dex
@@ -1499,52 +1481,35 @@ scroll_screen_down:
         ; After retreat from 0, check if we have content or need blanks
         lda rnd_hist_count
         ora rnd_top_row
-        beq @ssd_df_blank
-        lda #<rnd_top_linebuf
+        bne :+
+        jmp @ssd_df_blank
+:       lda #<rnd_top_linebuf
         sta zp_src
         lda #>rnd_top_linebuf
         sta zp_src+1
 @ssd_df_go:
         ldy #0
-@ssd_df_lb:
-        .repeat 8
+        .repeat 40
         lda (zp_src), y
         sta SCREEN, y
         iny
         .endrepeat
-        cpy #COLS
-        bne @ssd_df_lb
         ; Colour for deferred fill
         lda #$0F
-        ldy #0
-@ssd_df_clr:
-        .repeat 8
-        sta COLRAM, y
-        iny
+        .repeat 40, i
+        sta COLRAM + i
         .endrepeat
-        cpy #COLS
-        bne @ssd_df_clr
         rts
 @ssd_df_blank:
         lda #$00
-        ldy #0
-@ssd_df_bl:
-        .repeat 8
-        sta SCREEN, y
-        iny
+        .repeat 40, i
+        sta SCREEN + i
         .endrepeat
-        cpy #COLS
-        bne @ssd_df_bl
         ; Colour for deferred blank
         lda #$0F
-        ldy #0
-@ssd_df_bclr:
-        .repeat 8
-        sta COLRAM, y
-        iny
+        .repeat 40, i
+        sta COLRAM + i
         .endrepeat
-        cpy #COLS
-        bne @ssd_df_bclr
         rts
 
 
@@ -4358,11 +4323,11 @@ tile_off_hi:
 .byte >(tile_sets + 40*9), >(tile_sets + 41*9), >(tile_sets + 42*9), >(tile_sets + 43*9)
 
 ; =============================================================================
-;  Sprite data at $3000 — dedicated SPRITES segment
+;  Sprite data at $3700 — dedicated SPRITES segment
 ;  Right-pointing (►) for left side, Left-pointing (◄) for right side
 ;  Each sprite: 24×21 pixels = 63 bytes + 1 pad = 64 bytes
-;  Sprite 0 pointer = $3000/64 = $C0
-;  Sprite 1 pointer = $3040/64 = $C1
+;  Sprite 0 pointer = $3700/64 = $DC
+;  Sprite 1 pointer = $3740/64 = $DD
 ; =============================================================================
 .segment "SPRITES"
 
