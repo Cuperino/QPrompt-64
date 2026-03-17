@@ -5000,9 +5000,9 @@ spr_left_tri:   ; at $3040
 ;        was sharp, now rounded for D, R
 .byte $00,$00,$00,$07,$3F,$78,$70,$70
 
-; T22 — bot-left corner  (2-row left vert, 1-row transition, 3-step outer curve, 2px bot pad)
-;        was sharp, now rounded for D
-.byte $70,$70,$78,$3F,$0F,$03,$00,$00
+; T22 — bot-left corner  (3-row left vert, curve into bar, 2px bot pad)
+;        x-axis flip of T21 (adjusted for top/bot padding), used in D
+.byte $70,$70,$70,$78,$3F,$07,$00,$00
 
 ; T23 — diagonal TL-BR (4px stroke from top-left to bottom-right, full width)
 ;        used in N, Z, X, Y corners
