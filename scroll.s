@@ -136,6 +136,10 @@ start:
 
         ; First config screen — returns destination in A
         jsr config_screen
+        pha
+        lda #$36                    ; bank out BASIC ROM — BSS is under it
+        sta $01
+        pla
 
 ; --- Top-level dispatch: A = 0 (scroll/resume), 1 (editor), 2 (scroll/F3) ---
 main_dispatch:
@@ -187,12 +191,20 @@ main_dispatch:
         sta VIC_BORDER
         lda #$06
         sta VIC_BG
+        lda #$37                    ; bank in BASIC ROM for config_screen
+        sta $01
         jsr config_screen
+        lda #$36                    ; bank out BASIC ROM — BSS is under it
+        sta $01
         jmp main_dispatch
 
 ; --- Enter scroll mode and run scroll loop ---
 enter_scroll_mode:
+        lda #$37                    ; bank in BASIC ROM for float routines
+        sta $01
         jsr build_velocity_table
+        lda #$36                    ; bank out BASIC ROM — BSS is under it
+        sta $01
         lda #2
         sta came_from               ; mark that we're in scroll mode
         jsr prepare_scroll_text
@@ -385,7 +397,11 @@ enter_scroll_mode:
         sta VIC_BORDER
         lda #$06
         sta VIC_BG
+        lda #$37                    ; bank in BASIC ROM for config_screen
+        sta $01
         jsr config_screen
+        lda #$36                    ; bank out BASIC ROM — BSS is under it
+        sta $01
         jmp main_dispatch
 
 @scroll_reset:
@@ -428,7 +444,11 @@ enter_scroll_mode:
         sta VIC_BORDER
         lda #$06
         sta VIC_BG
+        lda #$37                    ; bank in BASIC ROM for config_screen
+        sta $01
         jsr config_screen
+        lda #$36                    ; bank out BASIC ROM — BSS is under it
+        sta $01
         jmp main_dispatch
 
 
@@ -1175,6 +1195,8 @@ irq_handler:
         jmp $EA31
 
 
+.segment "SCROLL"
+
 ; ---- Coarse scroll ----------------------------------------------------------
 scroll_screen_up:
         ; --- Direction guard: cancel stale forward scrolls if now reversing ---
@@ -1207,37 +1229,25 @@ scroll_screen_up:
 @ssu_ok:
         lda #0
         sta fwd_limit_reached
-        ldx #0
-@p0:    .repeat 16
-        lda SCREEN+COLS, x
-        sta SCREEN, x
-        inx
+        .repeat 256, i
+        lda SCREEN+COLS+i
+        sta SCREEN+i
         .endrepeat
-        bne @p0
 
-        ldx #0
-@p1:    .repeat 16
-        lda SCREEN+COLS+256, x
-        sta SCREEN+256, x
-        inx
+        .repeat 256, i
+        lda SCREEN+COLS+256+i
+        sta SCREEN+256+i
         .endrepeat
-        bne @p1
 
-        ldx #0
-@p2:    .repeat 16
-        lda SCREEN+COLS+512, x
-        sta SCREEN+512, x
-        inx
+        .repeat 256, i
+        lda SCREEN+COLS+512+i
+        sta SCREEN+512+i
         .endrepeat
-        bne @p2
 
-        ldx #0
-@p3:    .repeat 16
-        lda SCREEN+COLS+744, x
-        sta SCREEN+744, x
-        inx
+        .repeat 256, i
+        lda SCREEN+COLS+744+i
+        sta SCREEN+744+i
         .endrepeat
-        bne @p3
 
         ; Fill bottom row from render engine bot cursor
         lda rnd_bot_row
@@ -1317,28 +1327,21 @@ scroll_screen_down:
 @ssd_dec_lo:
         dec rows_from_start_lo
 
-        ; ── Save all 3 inter-page overlaps (4×-unrolled) ───────────────────
-        ldx #39
-@save:  .repeat 4
-        lda SCREEN+256, x
-        sta save_buf_a, x
-        lda SCREEN+512, x
-        sta save_buf_b, x
-        lda SCREEN+768, x
-        sta save_buf_c, x
-        dex
+        ; ── Save all 3 inter-page overlaps (fully unrolled) ────────────────
+        .repeat 40, i
+        lda SCREEN+256 + i
+        sta save_buf_a + i
+        lda SCREEN+512 + i
+        sta save_buf_b + i
+        lda SCREEN+768 + i
+        sta save_buf_c + i
         .endrepeat
-        bpl @save
 
-        ; ── Page 0: 16×-unrolled (256 bytes, offsets 0-255 → 40-295) ─────
-        ldx #0
-@d0:    .repeat 16
-        dex
-        lda SCREEN, x
-        sta SCREEN+COLS, x
+        ; ── Page 0: fully unrolled (256 bytes, offsets 0-255 → 40-295) ────
+        .repeat 256, i
+        lda SCREEN + 255 - i
+        sta SCREEN+COLS + 255 - i
         .endrepeat
-        txa
-        bne @d0
 
         ; ── Fill row 0 from render engine ────────────────────────────────
         lda rnd_top_row
@@ -1397,56 +1400,35 @@ scroll_screen_down:
         .endrepeat
 
 @ssd_page1:
-        ; ── Page 1: 16×-unrolled upper (216 bytes), 10×-unrolled lower ────
-        ldx #255
-@d1u:   .repeat 16
-        lda SCREEN+256, x
-        sta SCREEN+256+COLS, x
-        dex
+        ; ── Page 1: fully unrolled (216 upper + 40 lower = 256 bytes) ─────
+        .repeat 216, i
+        lda SCREEN+256 + 255 - i
+        sta SCREEN+256+COLS + 255 - i
         .endrepeat
-        cpx #39
-        bne @d1u
-        ldx #39
-@d1l:   .repeat 10
-        lda save_buf_a, x
-        sta SCREEN+256+COLS, x
-        dex
+        .repeat 40, i
+        lda save_buf_a + i
+        sta SCREEN+256+COLS + i
         .endrepeat
-        bpl @d1l
 
-        ; ── Page 2: 16×-unrolled upper (216 bytes), 10×-unrolled lower ────
-        ldx #255
-@d2u:   .repeat 16
-        lda SCREEN+512, x
-        sta SCREEN+512+COLS, x
-        dex
+        ; ── Page 2: fully unrolled (216 upper + 40 lower = 256 bytes) ─────
+        .repeat 216, i
+        lda SCREEN+512 + 255 - i
+        sta SCREEN+512+COLS + 255 - i
         .endrepeat
-        cpx #39
-        bne @d2u
-        ldx #39
-@d2l:   .repeat 10
-        lda save_buf_b, x
-        sta SCREEN+512+COLS, x
-        dex
+        .repeat 40, i
+        lda save_buf_b + i
+        sta SCREEN+512+COLS + i
         .endrepeat
-        bpl @d2l
 
-        ; ── Page 3: 16×-unrolled upper (152 bytes), 10×-unrolled lower ────
-        ldx #191
-@d3u:   .repeat 16
-        lda SCREEN+768, x
-        sta SCREEN+768+COLS, x
-        dex
+        ; ── Page 3: fully unrolled (152 upper + 40 lower = 192 bytes) ─────
+        .repeat 152, i
+        lda SCREEN+768 + 191 - i
+        sta SCREEN+768+COLS + 191 - i
         .endrepeat
-        cpx #39
-        bne @d3u
-        ldx #39
-@d3l:   .repeat 10
-        lda save_buf_c, x
-        sta SCREEN+768+COLS, x
-        dex
+        .repeat 40, i
+        lda save_buf_c + i
+        sta SCREEN+768+COLS + i
         .endrepeat
-        bpl @d3l
 
         ; ── Retreats ────────────────────────────────────────────────────
         lda ssd_fill_blank
@@ -1512,6 +1494,7 @@ scroll_screen_down:
         .endrepeat
         rts
 
+.segment "CODE"
 
 ; ---- Detect PAL or NTSC ---------------------------------------------------
 ; Sets is_ntsc: 0=PAL (312 lines/frame, 50fps), 1=NTSC (263 lines/frame, 60fps).
@@ -4331,7 +4314,7 @@ tile_off_hi:
 ; =============================================================================
 .segment "SPRITES"
 
-spr_right_tri:  ; at $3000
+spr_right_tri:
         .byte $80,$00,$00           ; Row 0:  *
         .byte $C0,$00,$00           ; Row 1:  **
         .byte $E0,$00,$00           ; Row 2:  ***
