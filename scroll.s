@@ -1938,15 +1938,27 @@ editor_loop:
 @not_down:
         cmp #$9D                    ; Cursor Left
         bne @not_left
+        lda $028D
+        and #$06                    ; Commodore (bit1) or Ctrl (bit2)?
+        bne @do_word_left
         jmp ed_cursor_left
+@do_word_left:
+        jmp ed_word_left
 @not_left:
         cmp #$1D                    ; Cursor Right
         bne @not_right_ed
+        lda $028D
+        and #$06                    ; Commodore (bit1) or Ctrl (bit2)?
+        bne @do_word_right
         jmp ed_cursor_right
+@do_word_right:
+        jmp ed_word_right
 @not_right_ed:
         ; Try printable character
         jsr petscii_to_screencode_editor
-        bcs editor_loop             ; carry set = not printable
+        bcc @is_printable           ; carry clear = printable
+        jmp editor_loop
+@is_printable:
         jmp ed_printable
 
 ; ---- Printable character ----------------------------------------------------
@@ -2108,6 +2120,257 @@ ed_cursor_right:
 @ecr_done:
         jsr draw_cursor
         jmp editor_loop
+
+; ---- C=+Right: Jump to start of next word ------------------------------------
+ed_word_right:
+        jsr undraw_cursor
+        jsr save_editor_page
+        jsr calc_cursor_doc_ptr     ; zp_src = cursor pos in doc_buffer
+        ; Save original position
+        lda zp_src
+        sta wskip_save
+        lda zp_src+1
+        sta wskip_save+1
+        ; End boundary = page_addr[total_pages]
+        ldx total_pages
+        lda page_addr_lo, x
+        sta wskip_end
+        lda page_addr_hi, x
+        sta wskip_end+1
+        ; Phase 1: skip non-spaces (rest of current word)
+@wr_nonsp:
+        lda zp_src+1
+        cmp wskip_end+1
+        bcc @wr_nonsp_ok
+        bne @wr_fail
+        lda zp_src
+        cmp wskip_end
+        bcs @wr_fail
+@wr_nonsp_ok:
+        ldy #0
+        lda (zp_src), y
+        cmp #$20
+        beq @wr_sp
+        inc zp_src
+        bne @wr_nonsp
+        inc zp_src+1
+        jmp @wr_nonsp
+        ; Phase 2: skip spaces
+@wr_sp:
+        lda zp_src+1
+        cmp wskip_end+1
+        bcc @wr_sp_ok
+        bne @wr_fail
+        lda zp_src
+        cmp wskip_end
+        bcs @wr_fail
+@wr_sp_ok:
+        ldy #0
+        lda (zp_src), y
+        cmp #$20
+        bne @wr_found
+        inc zp_src
+        bne @wr_sp
+        inc zp_src+1
+        jmp @wr_sp
+@wr_found:
+        ; zp_src = start of next word
+        jmp @wr_finish
+@wr_fail:
+        ; No next word — restore original position
+        lda wskip_save
+        sta zp_src
+        lda wskip_save+1
+        sta zp_src+1
+@wr_finish:
+        jsr doc_ptr_to_cursor
+        jsr load_editor_page
+        jsr draw_status_bar
+        jsr draw_cursor
+        jmp editor_loop
+
+; ---- C=+Left: Jump to start of previous word ---------------------------------
+ed_word_left:
+        jsr undraw_cursor
+        jsr save_editor_page
+        jsr calc_cursor_doc_ptr     ; zp_src = cursor pos in doc_buffer
+        ; Save original position
+        lda zp_src
+        sta wskip_save
+        lda zp_src+1
+        sta wskip_save+1
+        ; Start boundary = page_addr[0]
+        lda page_addr_lo
+        sta wskip_end
+        lda page_addr_hi
+        sta wskip_end+1
+        ; Check if already at document start
+        lda zp_src+1
+        cmp wskip_end+1
+        bne @wl_not_start
+        lda zp_src
+        cmp wskip_end
+        beq @wl_fail
+@wl_not_start:
+        ; Step back one position
+        lda zp_src
+        bne :+
+        dec zp_src+1
+:       dec zp_src
+        ; Phase 1: skip spaces backward
+@wl_skip_sp:
+        ldy #0
+        lda (zp_src), y
+        cmp #$20
+        bne @wl_skip_nonsp
+        ; Check if at start
+        lda zp_src+1
+        cmp wskip_end+1
+        bne @wl_sp_dec
+        lda zp_src
+        cmp wskip_end
+        beq @wl_fail                ; all spaces back to start → no prev word
+@wl_sp_dec:
+        lda zp_src
+        bne :+
+        dec zp_src+1
+:       dec zp_src
+        jmp @wl_skip_sp
+        ; Phase 2: skip non-spaces backward (inside previous word)
+@wl_skip_nonsp:
+        ; Check if at document start
+        lda zp_src+1
+        cmp wskip_end+1
+        bne @wl_nonsp_dec
+        lda zp_src
+        cmp wskip_end
+        beq @wl_found               ; at doc start = start of first word
+@wl_nonsp_dec:
+        lda zp_src
+        bne :+
+        dec zp_src+1
+:       dec zp_src
+        ldy #0
+        lda (zp_src), y
+        cmp #$20
+        bne @wl_skip_nonsp
+        ; Found space → next byte is start of word
+        inc zp_src
+        bne @wl_found
+        inc zp_src+1
+@wl_found:
+        jmp @wl_finish
+@wl_fail:
+        ; No previous word — restore original position
+        lda wskip_save
+        sta zp_src
+        lda wskip_save+1
+        sta zp_src+1
+@wl_finish:
+        jsr doc_ptr_to_cursor
+        jsr load_editor_page
+        jsr draw_status_bar
+        jsr draw_cursor
+        jmp editor_loop
+
+; ---- Helper: compute doc_buffer pointer for cursor position -------------------
+; Output: zp_src = page_addr[current_page] + cursor_y * 40 + cursor_x
+calc_cursor_doc_ptr:
+        ldx current_page
+        lda page_addr_lo, x
+        sta zp_src
+        lda page_addr_hi, x
+        sta zp_src+1
+        ; Compute cursor_y * 40 = y*8 + y*32
+        lda #0
+        sta wskip_tmp+1
+        lda cursor_y
+        asl                         ; *2
+        asl                         ; *4
+        asl                         ; *8
+        sta wskip_tmp
+        asl                         ; *16
+        rol wskip_tmp+1
+        asl                         ; *32
+        rol wskip_tmp+1
+        clc
+        adc wskip_tmp               ; *40 low
+        sta wskip_tmp
+        lda wskip_tmp+1
+        adc #0
+        sta wskip_tmp+1
+        ; Add to page base
+        clc
+        lda zp_src
+        adc wskip_tmp
+        sta zp_src
+        lda zp_src+1
+        adc wskip_tmp+1
+        sta zp_src+1
+        ; Add cursor_x
+        clc
+        lda zp_src
+        adc cursor_x
+        sta zp_src
+        lda zp_src+1
+        adc #0
+        sta zp_src+1
+        rts
+
+; ---- Helper: convert doc_buffer pointer to page/row/col ----------------------
+; Input: zp_src = pointer into doc_buffer
+; Output: current_page, cursor_y, cursor_x set
+doc_ptr_to_cursor:
+        ; Find page: zp_src < page_addr[x+1]
+        ldx #0
+@dpc_page:
+        inx
+        lda zp_src+1
+        cmp page_addr_hi, x
+        bcc @dpc_found
+        bne @dpc_page
+        lda zp_src
+        cmp page_addr_lo, x
+        bcs @dpc_page
+@dpc_found:
+        dex
+        stx current_page
+        ; offset = zp_src - page_addr[current_page]
+        sec
+        lda zp_src
+        sbc page_addr_lo, x
+        sta wskip_tmp
+        lda zp_src+1
+        sbc page_addr_hi, x
+        sta wskip_tmp+1
+        ; Divide offset by 40 → cursor_y (quotient), cursor_x (remainder)
+        lda #0
+        sta cursor_y
+@dpc_div:
+        lda wskip_tmp+1
+        bne @dpc_sub
+        lda wskip_tmp
+        cmp #40
+        bcc @dpc_done
+@dpc_sub:
+        sec
+        lda wskip_tmp
+        sbc #40
+        sta wskip_tmp
+        lda wskip_tmp+1
+        sbc #0
+        sta wskip_tmp+1
+        inc cursor_y
+        jmp @dpc_div
+@dpc_done:
+        lda wskip_tmp
+        sta cursor_x
+        rts
+
+; Word-skip temporary storage
+wskip_save:     .byte 0, 0             ; saved cursor doc_buffer position
+wskip_end:      .byte 0, 0             ; boundary (end for right, start for left)
+wskip_tmp:      .byte 0, 0             ; temp for multiply/divide
 
 ; ---- F7: Next page ----------------------------------------------------------
 ed_next_page:
