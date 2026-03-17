@@ -4371,15 +4371,15 @@ text_data_end:
 
 ; =============================================================================
 ;  Render engine RODATA
-;  tile_char_idx[128] — maps C64 screen codes $00-$7F to tile set index (0-43)
+;  tile_char_idx[128] — maps C64 screen codes $00-$7F to tile set index (0-44)
 ;  Screen codes: A-Z=$01-$1A, space=$20, 0-9=$30-$39
-;  Punctuation: ,=$2C .=$2E !=$21 ?=$3F -=$2D :=$3A '=$27
+;  Punctuation: ,=$2C .=$2E !=$21 ?=$3F -=$2D :=$3A '=$27 #=$23
 ; =============================================================================
 tile_char_idx:
 ;       $x0 $x1 $x2 $x3 $x4 $x5 $x6 $x7 $x8 $x9 $xA $xB $xC $xD $xE $xF
 .byte     0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15  ; $00-$0F (A-P)
 .byte    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,  0,  0,  0,  0,  0  ; $10-$1F (Q-Z)
-.byte     0, 39,  0,  0,  0,  0,  0, 43,  0,  0,  0,  0, 37, 41, 38,  0  ; $20-$2F (sp,!,',-,.,)
+.byte     0, 39,  0, 44,  0,  0,  0, 43,  0,  0,  0,  0, 37, 41, 38,  0  ; $20-$2F (sp,!,#,',-,.,)
 .byte    27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 42,  0,  0,  0,  0, 40  ; $30-$3F (0-9,:=3A,?=3F)
 .byte     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0  ; $40-$4F
 .byte     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0  ; $50-$5F
@@ -4483,6 +4483,8 @@ tile_sets:
 .byte  0,13, 0,  0, 0, 0,  0,13, 0
 ; Set 43 ': apostrophe at top-center
 .byte  0,13, 0,  0, 0, 0,  0, 0, 0
+; Set 44 #: two horiz bars crossing two verticals
+.byte  9,29,10,  4, 0, 5,  9,29,10
 
 ; Precomputed pointers into tile_sets (lo and hi bytes)
 tile_off_lo:
@@ -4497,6 +4499,7 @@ tile_off_lo:
 .byte <(tile_sets + 32*9), <(tile_sets + 33*9), <(tile_sets + 34*9), <(tile_sets + 35*9)
 .byte <(tile_sets + 36*9), <(tile_sets + 37*9), <(tile_sets + 38*9), <(tile_sets + 39*9)
 .byte <(tile_sets + 40*9), <(tile_sets + 41*9), <(tile_sets + 42*9), <(tile_sets + 43*9)
+.byte <(tile_sets + 44*9)
 
 tile_off_hi:
 .byte >(tile_sets +  0*9), >(tile_sets +  1*9), >(tile_sets +  2*9), >(tile_sets +  3*9)
@@ -4510,6 +4513,7 @@ tile_off_hi:
 .byte >(tile_sets + 32*9), >(tile_sets + 33*9), >(tile_sets + 34*9), >(tile_sets + 35*9)
 .byte >(tile_sets + 36*9), >(tile_sets + 37*9), >(tile_sets + 38*9), >(tile_sets + 39*9)
 .byte >(tile_sets + 40*9), >(tile_sets + 41*9), >(tile_sets + 42*9), >(tile_sets + 43*9)
+.byte >(tile_sets + 44*9)
 
 ; =============================================================================
 ;  Sprite data at $3700 — dedicated SPRITES segment
