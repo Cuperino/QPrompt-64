@@ -2963,7 +2963,7 @@ render_compute_line:
         beq @ww_nosep       ; first word → no sep
         lda rnd_wk_sep
         beq @ww_nosep
-        lda #1
+        lda #2
         sta rnd_wk_sep
         jmp @ww_chk_fit
 @ww_nosep:
