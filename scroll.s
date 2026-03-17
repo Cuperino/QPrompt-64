@@ -4391,14 +4391,14 @@ spr_left_tri:   ; at $3040
 ; T0 — blank
 .byte $00,$00,$00,$00,$00,$00,$00,$00
 
-; T1 — top-left corner  (3px top pad, 2-row full bar, 3-row left vert, rounded)
-.byte $00,$00,$00,$3F,$7F,$70,$70,$70
+; T1 — top-left corner  (3px top pad, 2-row bar, 1-row transition, 2-row left vert, rounded)
+.byte $00,$00,$00,$1F,$7F,$78,$70,$70
 
 ; T2 — top-center  (3px top pad, 2-row top bar, blank below)
 .byte $00,$00,$00,$7E,$7E,$00,$00,$00
 
-; T3 — top-right corner  (3px top pad, 2-row full bar, 3-row right vert, rounded)
-.byte $00,$00,$00,$FC,$FE,$0E,$0E,$0E
+; T3 — top-right corner  (3px top pad, 2-row bar, 1-row transition, 2-row right vert, rounded)
+.byte $00,$00,$00,$F8,$FE,$1E,$0E,$0E
 
 ; T4 — left vertical  (left 3px with 1px L-margin, full 8 rows)
 .byte $70,$70,$70,$70,$70,$70,$70,$70
@@ -4406,20 +4406,20 @@ spr_left_tri:   ; at $3040
 ; T5 — right vertical  (right 3px with 1px R-margin, full 8 rows)
 .byte $0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E
 
-; T6 — bot-left corner  (4-row left vert, 2-row full bar, 2px bot pad, rounded)
-.byte $70,$70,$70,$70,$7F,$3F,$00,$00
+; T6 — bot-left corner  (2-row left vert, 1-row transition, 2-row bar, 2px bot pad, rounded)
+.byte $70,$70,$70,$78,$7F,$1F,$00,$00
 
 ; T7 — bot-center  (4-row blank, 2-row bot bar, 2px bot pad)
 .byte $00,$00,$00,$00,$7E,$7E,$00,$00
 
-; T8 — bot-right corner  (4-row right vert, 2-row full bar, 2px bot pad, rounded)
-.byte $0E,$0E,$0E,$0E,$FE,$FC,$00,$00
+; T8 — bot-right corner  (2-row right vert, 1-row transition, 2-row bar, 2px bot pad, rounded)
+.byte $0E,$0E,$0E,$1E,$FE,$F8,$00,$00
 
-; T9 — hmid-left  (left vert rows 0-1, full midbar rows 2-4, left vert rows 5-7)
-.byte $70,$70,$7F,$7F,$7F,$70,$70,$70
+; T9 — hmid-left  (left vert, transition, midbar rows 2-4, transition, left vert)
+.byte $70,$78,$7F,$7F,$7F,$78,$70,$70
 
-; T10 — hmid-right  (right vert rows 0-1, full midbar rows 2-4, right vert rows 5-7)
-.byte $0E,$0E,$FE,$FE,$FE,$0E,$0E,$0E
+; T10 — hmid-right  (right vert, transition, midbar rows 2-4, transition, right vert)
+.byte $0E,$1E,$FE,$FE,$FE,$1E,$0E,$0E
 
 ; T11 — full block  (full bar with 1px L+R margins, all 8 rows)
 .byte $7E,$7E,$7E,$7E,$7E,$7E,$7E,$7E
@@ -4430,9 +4430,9 @@ spr_left_tri:   ; at $3040
 ; T13 — center dot  (centre 3px, rows 3-5, 2px bot pad)
 .byte $00,$00,$00,$38,$38,$38,$00,$00
 
-; T14 — mid-close-right (right vert rows 0-1, bar rows 2-4, blank rows 5-7, rounded)
+; T14 — mid-close-right (right vert, transition, bar rows 2-3, rounded row 4, blank, rounded)
 ;        used in mid-row right of P where nothing continues below
-.byte $0E,$0E,$FE,$FE,$FC,$00,$00,$00
+.byte $0E,$1E,$FE,$FE,$F8,$00,$00,$00
 
 ; T15 — top-left-vert (3px top gap, then left vert — matches top-gap of T1/T2/T3)
 .byte $00,$00,$00,$70,$70,$70,$70,$70
@@ -4440,13 +4440,13 @@ spr_left_tri:   ; at $3040
 ; T16 — top-right-vert (3px top gap, then right vert — matches top-gap of T1/T2/T3)
 .byte $00,$00,$00,$0E,$0E,$0E,$0E,$0E
 
-; T17 — hmid-left-close-bot (left vert rows 0-1, bar rows 2-3, rounded row 4, blank 5-7)
+; T17 — hmid-left-close-bot (left vert, transition, bar rows 2-3, rounded row 4, blank 5-7)
 ;        used in mid-row left where vert ends and bar extends right (S, 9)
-.byte $70,$70,$7F,$7F,$3F,$00,$00,$00
+.byte $70,$78,$7F,$7F,$1F,$00,$00,$00
 
-; T18 — hmid-right-close-top (blank rows 0-1, rounded row 2, bar rows 3-4, right vert 5-7)
+; T18 — hmid-right-close-top (blank rows 0-1, rounded row 2, bar rows 3-4, transition, right vert)
 ;        used in mid-row right where bar meets vert below (S, G)
-.byte $00,$00,$FC,$FE,$FE,$0E,$0E,$0E
+.byte $00,$00,$F8,$FE,$FE,$1E,$0E,$0E
 
 ; T19 — top-center-T (3px top pad, 2-row full bar, 3-row center vert)
 ;        T-shape junction: full-width bar with stem descending (I top, T top)
@@ -4456,13 +4456,13 @@ spr_left_tri:   ; at $3040
 ;        inverted-T junction: stem ascending into full-width bar (I bot, 1 bot)
 .byte $38,$38,$38,$38,$FF,$C7,$00,$00
 
-; T21 — top-left-square (3px top pad, 2-row full bar, 3-row left vert, sharp corner)
-;        non-rounded version of T1 for D, R
-.byte $00,$00,$00,$7F,$7F,$70,$70,$70
+; T21 — top-left-square (3px top pad, 2-row bar, 1-row transition, 2-row left vert, rounded)
+;        was sharp, now rounded for D, R
+.byte $00,$00,$00,$1F,$7F,$78,$70,$70
 
-; T22 — bot-left-square (4-row left vert, 2-row full bar, 2px bot pad, sharp corner)
-;        non-rounded version of T6 for D
-.byte $70,$70,$70,$70,$7F,$7F,$00,$00
+; T22 — bot-left-square (2-row left vert, 1-row transition, 2-row bar, 2px bot pad, rounded)
+;        was sharp, now rounded for D
+.byte $70,$70,$70,$78,$7F,$1F,$00,$00
 
 ; T23 — diagonal TL-BR (4px stroke from top-left to bottom-right, full width)
 ;        used in N, Z, X, Y corners
@@ -4526,7 +4526,7 @@ spr_left_tri:   ; at $3040
 
 ; T38 — hmid-right-notch (like T10 but col 6 removed from bar rows 2-4 only)
 ;        used in mid-row right of R, B — notch aligns with mid-center bar
-.byte $0E,$0E,$FC,$FC,$FC,$0E,$0E,$0E
+.byte $0E,$1E,$FC,$FC,$FC,$1E,$0E,$0E
 
 ; T39-T255 zero-filled to reach 256 tiles
 .res (256-39)*8, 0
