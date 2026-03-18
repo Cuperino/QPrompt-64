@@ -1283,66 +1283,42 @@ scroll_screen_up:
 @ssu_ok:
         lda #0
         sta fwd_limit_reached
+
+        ; ── Shift SCREEN + COLRAM up by one row (fully interleaved) ────────
         .repeat 256, i
         lda SCREEN+COLS+i
         sta SCREEN+i
+        lda COLRAM+COLS+i
+        sta COLRAM+i
         .endrepeat
 
         .repeat 256, i
         lda SCREEN+COLS+256+i
         sta SCREEN+256+i
+        lda COLRAM+COLS+256+i
+        sta COLRAM+256+i
         .endrepeat
 
         .repeat 256, i
         lda SCREEN+COLS+512+i
         sta SCREEN+512+i
+        lda COLRAM+COLS+512+i
+        sta COLRAM+512+i
         .endrepeat
 
         .repeat 192, i
         lda SCREEN+COLS+768+i
         sta SCREEN+768+i
+        lda COLRAM+COLS+768+i
+        sta COLRAM+768+i
         .endrepeat
-
-        ; ── Shift COLRAM up by one row (per-page loops) ─────────────────
-        ldx #0
-@ssu_cr0:
-        .repeat 4
-        lda COLRAM+COLS, x
-        sta COLRAM, x
-        inx
-        .endrepeat
-        bne @ssu_cr0
-        ldx #0
-@ssu_cr1:
-        .repeat 4
-        lda COLRAM+COLS+256, x
-        sta COLRAM+256, x
-        inx
-        .endrepeat
-        bne @ssu_cr1
-        ldx #0
-@ssu_cr2:
-        .repeat 4
-        lda COLRAM+COLS+512, x
-        sta COLRAM+512, x
-        inx
-        .endrepeat
-        bne @ssu_cr2
-        ldx #0
-@ssu_cr3:
-        .repeat 4
-        lda COLRAM+COLS+768, x
-        sta COLRAM+768, x
-        inx
-        .endrepeat
-        cpx #192
-        bne @ssu_cr3
 
         ; ── Remap zone boundary colors after shift ───────────────────────
         ; Row 8 moved from inner(9)→outer(8): light → base
         ldx #39
 @ssu_remap8:
         lda COLRAM + 8*COLS, x
+        and #$0F                    ; COLRAM is 4-bit; mask garbage high nibble
         tay
         lda color_to_base, y
         sta COLRAM + 8*COLS, x
@@ -1352,6 +1328,7 @@ scroll_screen_up:
         ldx #39
 @ssu_remap15:
         lda COLRAM + 15*COLS, x
+        and #$0F
         tay
         lda color_to_light, y
         sta COLRAM + 15*COLS, x
@@ -1528,41 +1505,11 @@ scroll_screen_down:
         bpl @ssd_newcol
 
 @ssd_page1:
-        ; ── Page 1: fully unrolled (216 upper + 40 lower = 256 bytes) ─────
-        .repeat 216, i
-        lda SCREEN+256 + 255 - i
-        sta SCREEN+256+COLS + 255 - i
-        .endrepeat
-        .repeat 40, i
-        lda save_buf_a + i
-        sta SCREEN+256+COLS + i
-        .endrepeat
-
-        ; ── Page 2: fully unrolled (216 upper + 40 lower = 256 bytes) ─────
-        .repeat 216, i
-        lda SCREEN+512 + 255 - i
-        sta SCREEN+512+COLS + 255 - i
-        .endrepeat
-        .repeat 40, i
-        lda save_buf_b + i
-        sta SCREEN+512+COLS + i
-        .endrepeat
-
-        ; ── Page 3: fully unrolled (152 upper + 40 lower = 192 bytes) ─────
-        .repeat 152, i
-        lda SCREEN+768 + 191 - i
-        sta SCREEN+768+COLS + 191 - i
-        .endrepeat
-        .repeat 40, i
-        lda save_buf_c + i
-        sta SCREEN+768+COLS + i
-        .endrepeat
-
-        ; ── COLRAM Pages 1-3: shift down (reverse, then restore overlaps) ─
+        ; ── Page 1: COLRAM shift first (slow), then SCREEN shift (fast) ──
         ldx #215
 @ssd_cr1:
-        lda COLRAM+256, x
-        sta COLRAM+256+COLS, x
+        lda COLRAM+256+COLS, x
+        sta COLRAM+256+COLS+COLS, x
         dex
         cpx #$FF
         bne @ssd_cr1
@@ -1572,11 +1519,20 @@ scroll_screen_down:
         sta COLRAM+256+COLS, x
         dex
         bpl @ssd_cr1r
+        .repeat 216, i
+        lda SCREEN+256 + 255 - i
+        sta SCREEN+256+COLS + 255 - i
+        .endrepeat
+        .repeat 40, i
+        lda save_buf_a + i
+        sta SCREEN+256+COLS + i
+        .endrepeat
 
+        ; ── Page 2: COLRAM first, then SCREEN ────────────────────────────
         ldx #215
 @ssd_cr2:
-        lda COLRAM+512, x
-        sta COLRAM+512+COLS, x
+        lda COLRAM+512+COLS, x
+        sta COLRAM+512+COLS+COLS, x
         dex
         cpx #$FF
         bne @ssd_cr2
@@ -1586,11 +1542,20 @@ scroll_screen_down:
         sta COLRAM+512+COLS, x
         dex
         bpl @ssd_cr2r
+        .repeat 216, i
+        lda SCREEN+512 + 255 - i
+        sta SCREEN+512+COLS + 255 - i
+        .endrepeat
+        .repeat 40, i
+        lda save_buf_b + i
+        sta SCREEN+512+COLS + i
+        .endrepeat
 
+        ; ── Page 3: COLRAM first, then SCREEN ────────────────────────────
         ldx #151
 @ssd_cr3:
-        lda COLRAM+768, x
-        sta COLRAM+768+COLS, x
+        lda COLRAM+768+COLS, x
+        sta COLRAM+768+COLS+COLS, x
         dex
         cpx #$FF
         bne @ssd_cr3
@@ -1600,12 +1565,21 @@ scroll_screen_down:
         sta COLRAM+768+COLS, x
         dex
         bpl @ssd_cr3r
+        .repeat 152, i
+        lda SCREEN+768 + 191 - i
+        sta SCREEN+768+COLS + 191 - i
+        .endrepeat
+        .repeat 40, i
+        lda save_buf_c + i
+        sta SCREEN+768+COLS + i
+        .endrepeat
 
         ; ── Remap zone boundary colors after down shift ──────────────────
         ; Row 9 moved from outer(8)→inner(9): base → light
         ldx #39
 @ssd_remap9:
         lda COLRAM + 9*COLS, x
+        and #$0F                    ; COLRAM is 4-bit; mask garbage high nibble
         tay
         lda color_to_light, y
         sta COLRAM + 9*COLS, x
@@ -1615,6 +1589,7 @@ scroll_screen_down:
         ldx #39
 @ssd_remap16:
         lda COLRAM + 16*COLS, x
+        and #$0F
         tay
         lda color_to_base, y
         sta COLRAM + 16*COLS, x
