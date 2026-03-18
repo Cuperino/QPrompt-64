@@ -248,10 +248,10 @@ enter_scroll_mode:
         sta VIC_CTRL2
 
         ; --- Set up sprites ---
-        ; Sprite data pointers: sprite 0 at $3700/64=$DC, sprite 1 at $3740/64=$DD
-        lda #$DC
+        ; Sprite data pointers: sprite 0 at $3F00/64=$FC, sprite 1 at $3F40/64=$FD
+        lda #$FC
         sta SPR_PTR                 ; Sprite 0 = right-pointing triangle
-        lda #$DD
+        lda #$FD
         sta SPR_PTR+1               ; Sprite 1 = left-pointing triangle
 
         ; Sprite positions — vertically centered
@@ -1415,38 +1415,22 @@ scroll_screen_down:
 @ssd_dec_lo:
         dec rows_from_start_lo
 
-        ; ── Save all 3 inter-page overlaps (fully unrolled) ────────────────
+        ; ── Save page 1 overlap (page 0 shift will overwrite [256..295]) ───
+        ; Pages 2-3 don't need saves: processed before page 0 in reverse order.
         .repeat 40, i
         lda SCREEN+256 + i
         sta save_buf_a + i
-        lda SCREEN+512 + i
-        sta save_buf_b + i
-        lda SCREEN+768 + i
-        sta save_buf_c + i
         lda COLRAM+256 + i
         sta col_save_a + i
-        lda COLRAM+512 + i
-        sta col_save_b + i
-        lda COLRAM+768 + i
-        sta col_save_c + i
         .endrepeat
 
-        ; ── Page 0: fully unrolled (256 bytes, offsets 0-255 → 40-295) ────
+        ; ── Page 0: SCREEN + COLRAM fully interleaved (reverse order) ──────
         .repeat 256, i
         lda SCREEN + 255 - i
         sta SCREEN+COLS + 255 - i
+        lda COLRAM + 255 - i
+        sta COLRAM+COLS + 255 - i
         .endrepeat
-
-        ; ── COLRAM Page 0: shift down (reverse order, semi-unrolled) ──────
-        ldx #255
-@ssd_cr0:
-        .repeat 8
-        lda COLRAM, x
-        sta COLRAM+COLS, x
-        dex
-        .endrepeat
-        cpx #$FF
-        bne @ssd_cr0
 
         ; ── Fill row 0 from render engine ────────────────────────────────
         lda rnd_top_row
@@ -1507,14 +1491,27 @@ scroll_screen_down:
         bpl @ssd_newcol
 
 @ssd_page1:
+        ; ── Process pages in reverse order (3→2→1) so bottom pages ───────
+        ; ── finish first, before VIC scans those rows.                 ───
+        ; ── Pages 2-3 read directly (page 0 hasn't corrupted them).   ───
+        ; ── Page 1 uses save buffers (page 0 overwrote [256..295]).   ───
+
+        ; ── Page 3: COLRAM (unrolled sub) then SCREEN (unrolled) ─────────
+        jsr ssd_colram_p3
+        .repeat 192, i
+        lda SCREEN+768 + 191 - i
+        sta SCREEN+768+COLS + 191 - i
+        .endrepeat
+
+        ; ── Page 2: COLRAM (unrolled sub) then SCREEN (unrolled) ─────────
+        jsr ssd_colram_p2
+        .repeat 256, i
+        lda SCREEN+512 + 255 - i
+        sta SCREEN+512+COLS + 255 - i
+        .endrepeat
+
         ; ── Page 1: COLRAM (unrolled sub) then SCREEN (unrolled) ─────────
-        jsr ssd_colram_p1_upper
-        ldx #39
-@ssd_cr1r:
-        lda col_save_a, x
-        sta COLRAM+256+COLS, x
-        dex
-        bpl @ssd_cr1r
+        jsr ssd_colram_p1
         .repeat 216, i
         lda SCREEN+256 + 255 - i
         sta SCREEN+256+COLS + 255 - i
@@ -1522,40 +1519,6 @@ scroll_screen_down:
         .repeat 40, i
         lda save_buf_a + i
         sta SCREEN+256+COLS + i
-        .endrepeat
-
-        ; ── Page 2: COLRAM (unrolled sub) then SCREEN (unrolled) ─────────
-        jsr ssd_colram_p2_upper
-        ldx #39
-@ssd_cr2r:
-        lda col_save_b, x
-        sta COLRAM+512+COLS, x
-        dex
-        bpl @ssd_cr2r
-        .repeat 216, i
-        lda SCREEN+512 + 255 - i
-        sta SCREEN+512+COLS + 255 - i
-        .endrepeat
-        .repeat 40, i
-        lda save_buf_b + i
-        sta SCREEN+512+COLS + i
-        .endrepeat
-
-        ; ── Page 3: COLRAM (unrolled sub) then SCREEN (unrolled) ─────────
-        jsr ssd_colram_p3_upper
-        ldx #39
-@ssd_cr3r:
-        lda col_save_c, x
-        sta COLRAM+768+COLS, x
-        dex
-        bpl @ssd_cr3r
-        .repeat 152, i
-        lda SCREEN+768 + 191 - i
-        sta SCREEN+768+COLS + 191 - i
-        .endrepeat
-        .repeat 40, i
-        lda save_buf_c + i
-        sta SCREEN+768+COLS + i
         .endrepeat
 
         ; ── Remap zone boundary colors after down shift ──────────────────
@@ -5289,8 +5252,8 @@ tile_off_hi:
 ;  Sprite data at $3700 — dedicated SPRITES segment
 ;  Right-pointing (►) for left side, Left-pointing (◄) for right side
 ;  Each sprite: 24×21 pixels = 63 bytes + 1 pad = 64 bytes
-;  Sprite 0 pointer = $3700/64 = $DC
-;  Sprite 1 pointer = $3740/64 = $DD
+;  Sprite 0 pointer = $3F00/64 = $FC
+;  Sprite 1 pointer = $3F40/64 = $FD
 ; =============================================================================
 .segment "SPRITES"
 
@@ -5509,8 +5472,8 @@ spr_left_tri:   ; at $3040
 ;        used in top-center of "
 .byte $00,$00,$00,$66,$66,$66,$00,$00
 
-; T39-T255 zero-filled to reach 256 tiles
-.res (256-39)*8, 0
+; T39-T223 zero-filled (T224-T255 reserved for sprite data at $3F00)
+.res (224-39)*8, 0
 
 ; =============================================================================
 ;  SCROLL2 segment — unrolled COLRAM down-shift subroutines
@@ -5518,28 +5481,37 @@ spr_left_tri:   ; at $3040
 ; =============================================================================
 .segment "SCROLL2"
 
-; Fully unrolled upper-byte COLRAM shift for scroll_screen_down pages 1-3.
-; Each copies the upper N bytes down by COLS (40) in reverse order.
-; The overlap restores (40 bytes each) stay as loops in the caller.
+; Fully unrolled COLRAM down-shift for scroll_screen_down pages 1-3.
+; Reverse page order (3→2→1): pages 2-3 read directly from original
+; COLRAM positions (page 0 hasn't run yet).  Page 1 reads overlap
+; from col_save_a (page 0 already overwrote COLRAM[256..295]).
 
-ssd_colram_p1_upper:
+ssd_colram_p3:
+        ; 192 bytes: COLRAM[768..959] → COLRAM[808..999] (reverse order)
+        .repeat 192, i
+        lda COLRAM+768 + 191 - i
+        sta COLRAM+768+COLS + 191 - i
+        .endrepeat
+        rts
+
+ssd_colram_p2:
+        ; 256 bytes: COLRAM[512..767] → COLRAM[552..807] (reverse order)
+        .repeat 256, i
+        lda COLRAM+512 + 255 - i
+        sta COLRAM+512+COLS + 255 - i
+        .endrepeat
+        rts
+
+ssd_colram_p1:
+        ; Upper 216 bytes: COLRAM[296..511] → COLRAM[336..551]
         .repeat 216, i
         lda COLRAM+256+COLS + 215 - i
         sta COLRAM+256+COLS+COLS + 215 - i
         .endrepeat
-        rts
-
-ssd_colram_p2_upper:
-        .repeat 216, i
-        lda COLRAM+512+COLS + 215 - i
-        sta COLRAM+512+COLS+COLS + 215 - i
-        .endrepeat
-        rts
-
-ssd_colram_p3_upper:
-        .repeat 152, i
-        lda COLRAM+768+COLS + 151 - i
-        sta COLRAM+768+COLS+COLS + 151 - i
+        ; Overlap 40 bytes: col_save_a → COLRAM[296..335]
+        .repeat 40, i
+        lda col_save_a + i
+        sta COLRAM+256+COLS + i
         .endrepeat
         rts
 
