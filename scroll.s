@@ -4767,7 +4767,7 @@ tile_sets:
 ; Set 27 0: frame
 .byte  1,27, 3,  4, 0, 5,  6,29, 8
 ; Set 28 1: center col with invT bot bar
-.byte  0, 1, 0,  0, 4, 0,  0, 6, 0
+.byte  0,19, 0,  0, 4, 0,  0, 6, 0
 ; Set 29 2: top-right + corner mid-right + bot-left
 .byte  1,27, 3,  0,28,14,  6,29, 7
 ; Set 30 3: right-side only open on left
