@@ -286,6 +286,10 @@ enter_scroll_mode:
         lda #$1E                    ; screen@$0400, charset@$3800 (bank 0)
         sta $D018
 
+        ; Re-enable Commodore+Shift charset toggle (disabled during editor/config)
+        lda #$00
+        sta $0291
+
         ; Count rendered content lines and compute forward scroll limit
         jsr count_rendered_lines
 
@@ -507,12 +511,12 @@ clear_screen:
         .endrepeat
         bne @cs1
 
-        ; Colour RAM: rows 0-8 = white (bytes 0-359)
-        ;            rows 9-15 = light gray (bytes 360-639)
-        ;            rows 16-24 = white (bytes 640-999)
+        ; Colour RAM: rows 0-8 = base (bytes 0-359)
+        ;            rows 9-15 = light (bytes 360-639)
+        ;            rows 16-24 = base (bytes 640-999)
         ; Split across pages since X is 8-bit only.
 
-        ; Bytes 0-255: rows 0-6 (all white)
+        ; Bytes 0-255: rows 0-6 (base = $0F default light gray)
         lda #WHITE
         ldx #0
 @cr0:   .repeat 8
@@ -521,7 +525,7 @@ clear_screen:
         .endrepeat
         bne @cr0
 
-        ; Bytes 256-359: rows 7-8 (still white)
+        ; Bytes 256-359: rows 7-8 (base)
         lda #WHITE
         ldx #0
 @cr1a:  .repeat 8
@@ -531,7 +535,7 @@ clear_screen:
         cpx #104
         bne @cr1a
 
-        ; Bytes 360-511: rows 9-12 (light gray)
+        ; Bytes 360-511: rows 9-12 (light = $01 white)
         lda #LIGHT_GRAY
         ldx #104
 @cr1b:  .repeat 8
@@ -540,7 +544,7 @@ clear_screen:
         .endrepeat
         bne @cr1b
 
-        ; Bytes 512-639: rows 12-15 (light gray)
+        ; Bytes 512-639: rows 12-15 (light)
         lda #LIGHT_GRAY
         ldx #0
 @cr2a:  .repeat 8
@@ -550,7 +554,7 @@ clear_screen:
         cpx #128
         bne @cr2a
 
-        ; Bytes 640-767: rows 16-19 (white)
+        ; Bytes 640-767: rows 16-19 (base)
         lda #WHITE
         ldx #128
 @cr2b:  .repeat 8
@@ -559,7 +563,7 @@ clear_screen:
         .endrepeat
         bne @cr2b
 
-        ; Page 3: COLRAM+768..1023 (rows 19-24, 24 extra bytes harmless)
+        ; Page 3: COLRAM+768..1023 (rows 19-24, base)
         lda #WHITE
         ldx #0
 @cr3:   .repeat 8
@@ -604,9 +608,17 @@ config_screen_init:
         sta first_run
         lda #0
         sta came_from
+        ; Initialize color settings
+        lda #$0F
+        sta cfg_font_color          ; default light gray
+        lda #$0B
+        sta cfg_bg_color            ; default dark gray
         rts
 
 config_screen:
+        ; Disable Commodore+Shift charset toggle
+        lda #$80
+        sta $0291
         ; Flush KERNAL keyboard buffer to prevent queued keys from
         ; being read as immediate input (e.g. F3 pressed during scroll)
         lda #0
@@ -1068,7 +1080,7 @@ irq_handler:
         ; cycles 0-10 on target (before visible area).  When target-1 is a
         ; bad line (fine_scroll matches), skip delay — the bad-line halt
         ; already consumed the extra cycles.
-        lda #DARK_GRAY
+        lda cfg_bg_color
         ldx #(RASTER_ZONE_ON - 1)
 @w0:    cpx VIC_RASTER
         bne @w0
@@ -1109,7 +1121,7 @@ irq_handler:
         ; --- State 4: indicator off ---
         ; Sprite DMA on these lines (140-160) prevents poll exit before cycle 3,
         ; so STA lands at cycles 9-12 — before visible border at ~cycle 14.
-        lda #DARK_GRAY
+        lda cfg_bg_color
         ldx #RASTER_INDICATOR_OFF
 @w4:    cpx VIC_RASTER
         bne @w4
@@ -1291,6 +1303,61 @@ scroll_screen_up:
         sta SCREEN+768+i
         .endrepeat
 
+        ; ── Shift COLRAM up by one row (per-page loops) ─────────────────
+        ldx #0
+@ssu_cr0:
+        .repeat 4
+        lda COLRAM+COLS, x
+        sta COLRAM, x
+        inx
+        .endrepeat
+        bne @ssu_cr0
+        ldx #0
+@ssu_cr1:
+        .repeat 4
+        lda COLRAM+COLS+256, x
+        sta COLRAM+256, x
+        inx
+        .endrepeat
+        bne @ssu_cr1
+        ldx #0
+@ssu_cr2:
+        .repeat 4
+        lda COLRAM+COLS+512, x
+        sta COLRAM+512, x
+        inx
+        .endrepeat
+        bne @ssu_cr2
+        ldx #0
+@ssu_cr3:
+        .repeat 4
+        lda COLRAM+COLS+768, x
+        sta COLRAM+768, x
+        inx
+        .endrepeat
+        cpx #192
+        bne @ssu_cr3
+
+        ; ── Remap zone boundary colors after shift ───────────────────────
+        ; Row 8 moved from inner(9)→outer(8): light → base
+        ldx #39
+@ssu_remap8:
+        lda COLRAM + 8*COLS, x
+        tay
+        lda color_to_base, y
+        sta COLRAM + 8*COLS, x
+        dex
+        bpl @ssu_remap8
+        ; Row 15 moved from outer(16)→inner(15): base → light
+        ldx #39
+@ssu_remap15:
+        lda COLRAM + 15*COLS, x
+        tay
+        lda color_to_light, y
+        sta COLRAM + 15*COLS, x
+        dex
+        bpl @ssu_remap15
+
         ; Fill bottom row from render engine bot cursor
         lda rnd_bot_row
         beq @ssu_row0
@@ -1320,11 +1387,13 @@ scroll_screen_up:
         iny
         .endrepeat
 
-        ; Colour for new row = white
-        lda #$0F
-        .repeat 40, i
-        sta COLRAM + (ROWS-1)*COLS + i
-        .endrepeat
+        ; Colour for new bottom row (row 24 = outer zone → base color)
+        ldx #39
+@ssu_newcol:
+        lda rnd_bot_colbuf, x
+        sta COLRAM + (ROWS-1)*COLS, x
+        dex
+        bpl @ssu_newcol
 
         jsr render_advance_bot
         jsr render_advance_top
@@ -1377,6 +1446,12 @@ scroll_screen_down:
         sta save_buf_b + i
         lda SCREEN+768 + i
         sta save_buf_c + i
+        lda COLRAM+256 + i
+        sta col_save_a + i
+        lda COLRAM+512 + i
+        sta col_save_b + i
+        lda COLRAM+768 + i
+        sta col_save_c + i
         .endrepeat
 
         ; ── Page 0: fully unrolled (256 bytes, offsets 0-255 → 40-295) ────
@@ -1384,6 +1459,15 @@ scroll_screen_down:
         lda SCREEN + 255 - i
         sta SCREEN+COLS + 255 - i
         .endrepeat
+
+        ; ── COLRAM Page 0: shift down (reverse order) ────────────────────
+        ldx #255
+@ssd_cr0:
+        lda COLRAM, x
+        sta COLRAM+COLS, x
+        dex
+        cpx #$FF
+        bne @ssd_cr0
 
         ; ── Fill row 0 from render engine ────────────────────────────────
         lda rnd_top_row
@@ -1435,11 +1519,13 @@ scroll_screen_down:
         sta ssd_fill_blank
 
 @ssd_fill_color:
-        ; Colour for new top row = white
-        lda #$0F
-        .repeat 40, i
-        sta COLRAM + i
-        .endrepeat
+        ; Colour for new top row (row 0 = outer zone → base color from colbuf)
+        ldx #39
+@ssd_newcol:
+        lda rnd_top_colbuf, x
+        sta COLRAM, x
+        dex
+        bpl @ssd_newcol
 
 @ssd_page1:
         ; ── Page 1: fully unrolled (216 upper + 40 lower = 256 bytes) ─────
@@ -1471,6 +1557,69 @@ scroll_screen_down:
         lda save_buf_c + i
         sta SCREEN+768+COLS + i
         .endrepeat
+
+        ; ── COLRAM Pages 1-3: shift down (reverse, then restore overlaps) ─
+        ldx #215
+@ssd_cr1:
+        lda COLRAM+256, x
+        sta COLRAM+256+COLS, x
+        dex
+        cpx #$FF
+        bne @ssd_cr1
+        ldx #39
+@ssd_cr1r:
+        lda col_save_a, x
+        sta COLRAM+256+COLS, x
+        dex
+        bpl @ssd_cr1r
+
+        ldx #215
+@ssd_cr2:
+        lda COLRAM+512, x
+        sta COLRAM+512+COLS, x
+        dex
+        cpx #$FF
+        bne @ssd_cr2
+        ldx #39
+@ssd_cr2r:
+        lda col_save_b, x
+        sta COLRAM+512+COLS, x
+        dex
+        bpl @ssd_cr2r
+
+        ldx #151
+@ssd_cr3:
+        lda COLRAM+768, x
+        sta COLRAM+768+COLS, x
+        dex
+        cpx #$FF
+        bne @ssd_cr3
+        ldx #39
+@ssd_cr3r:
+        lda col_save_c, x
+        sta COLRAM+768+COLS, x
+        dex
+        bpl @ssd_cr3r
+
+        ; ── Remap zone boundary colors after down shift ──────────────────
+        ; Row 9 moved from outer(8)→inner(9): base → light
+        ldx #39
+@ssd_remap9:
+        lda COLRAM + 9*COLS, x
+        tay
+        lda color_to_light, y
+        sta COLRAM + 9*COLS, x
+        dex
+        bpl @ssd_remap9
+        ; Row 16 moved from inner(15)→outer(16): light → base
+        ldx #39
+@ssd_remap16:
+        lda COLRAM + 16*COLS, x
+        tay
+        lda color_to_base, y
+        sta COLRAM + 16*COLS, x
+        dex
+        bpl @ssd_remap16
 
         ; ── Retreats ────────────────────────────────────────────────────
         lda ssd_fill_blank
@@ -1518,18 +1667,20 @@ scroll_screen_down:
         sta SCREEN, y
         iny
         .endrepeat
-        ; Colour for deferred fill
-        lda #$0F
-        .repeat 40, i
-        sta COLRAM + i
-        .endrepeat
+        ; Colour for deferred fill (row 0 = outer → base from colbuf)
+        ldx #39
+@ssd_df_col:
+        lda rnd_top_colbuf, x
+        sta COLRAM, x
+        dex
+        bpl @ssd_df_col
         rts
 @ssd_df_blank:
         lda #$00
         .repeat 40, i
         sta SCREEN + i
         .endrepeat
-        ; Colour for deferred blank
+        ; Colour for deferred blank (default base)
         lda #$0F
         .repeat 40, i
         sta COLRAM + i
@@ -1785,6 +1936,10 @@ disable_raster_restore_kernal:
         lda #$14                    ; screen@$0400, ROM charset@$1000 (bank 0)
         sta $D018
 
+        ; Disable Commodore+Shift charset toggle
+        lda #$80
+        sta $0291
+
         lda #$08                    ; CSEL=1 (40-col mode)
         sta VIC_CTRL2
 
@@ -1892,8 +2047,9 @@ editor_loop:
         jmp do_ctrl_o
 @not_ctrl_o:
         cmp #$33                    ; HOME/CLR key
-        bne @no_ctrl
+        bne @not_ctrl_clr
         jmp do_ctrl_clr
+@not_ctrl_clr:
 @no_ctrl:
         ; GETIN for normal keys
         jsr KERNAL_GETIN
@@ -1954,6 +2110,31 @@ editor_loop:
 @do_word_right:
         jmp ed_word_right
 @not_right_ed:
+        ; ── F4 = cycle font color (light gray → red → blue → green → ...) ─
+        cmp #$8A                    ; F4 (Shift+F3)
+        bne @not_f4
+        ldx cfg_font_color
+        lda color_to_idx, x        ; current index 0-3
+        clc
+        adc #1
+        and #$03                    ; wrap 0-3
+        tax
+        lda idx_to_color_base, x   ; next C64 color
+        sta cfg_font_color
+        jsr draw_status_bar
+        jmp editor_loop
+@not_f4:
+        ; ── F2 = cycle background color ──────────────────────────────────
+        cmp #$89                    ; F2 (Shift+F1)
+        bne @not_f2
+        lda cfg_bg_color
+        clc
+        adc #1
+        and #$0F
+        sta cfg_bg_color
+        jsr draw_status_bar
+        jmp editor_loop
+@not_f2:
         ; Try printable character
         jsr petscii_to_screencode_editor
         bcc @is_printable           ; carry clear = printable
@@ -1971,6 +2152,17 @@ ed_printable:
         ; Write at cursor position
         ldy #0
         sta (zp_dst), y
+        ; Write font color to COLRAM at same position
+        ; COLRAM addr = zp_dst - SCREEN + COLRAM
+        lda zp_dst
+        clc
+        adc #<(COLRAM - SCREEN)
+        sta zp_src
+        lda zp_dst+1
+        adc #>(COLRAM - SCREEN)
+        sta zp_src+1
+        lda cfg_font_color
+        sta (zp_src), y             ; Y is still 0
         ; Advance cursor right
         inc cursor_x
         lda cursor_x
@@ -2563,6 +2755,9 @@ petscii_to_screencode_editor:
         rts
 
 ; ---- Save editor page: SCREEN rows 0-23 → doc_buffer -----------------------
+; Encodes color from COLRAM into bits 6-7 of each screen code.
+; Uses ZP $22-$23 as temporary COLRAM pointer (safe when BASIC is banked out).
+SEP_COLPTR = $22
 save_editor_page:
         ; Calculate doc_buffer address for current_page
         ldx current_page
@@ -2576,31 +2771,68 @@ save_editor_page:
         sta zp_src
         lda #>SCREEN
         sta zp_src+1
+        ; COLRAM pointer (same lo, hi = SCREEN hi + $D4)
+        lda #<COLRAM
+        sta SEP_COLPTR
+        lda #>COLRAM
+        sta SEP_COLPTR+1
 
-        ; Copy 960 bytes = 3 full 256-byte pages + 192 bytes
-        ldx #3
+        ; Encode 960 bytes (3 full pages + 192 tail)
+        lda #3
+        sta @sep_cnt
 @sep_full:
         ldy #0
 @sep_byte:
-        lda (zp_src), y
+        lda (zp_src), y         ; screen code
+        and #$3F                ; mask out any old high bits
+        sta @sep_tmp
+        lda (SEP_COLPTR), y    ; COLRAM color
+        and #$0F
+        tax
+        lda color_to_idx, x    ; 2-bit color index (0-3)
+        asl
+        asl
+        asl
+        asl
+        asl
+        asl                     ; shift index into bits 6-7
+        ora @sep_tmp            ; combine with screen code
         sta (zp_dst), y
         iny
         bne @sep_byte
         inc zp_src+1
         inc zp_dst+1
-        dex
+        inc SEP_COLPTR+1
+        dec @sep_cnt
         bne @sep_full
-        ; Copy remaining 192 bytes
+        ; Remaining 192 bytes
         ldy #0
 @sep_tail:
         lda (zp_src), y
+        and #$3F
+        sta @sep_tmp
+        lda (SEP_COLPTR), y
+        and #$0F
+        tax
+        lda color_to_idx, x
+        asl
+        asl
+        asl
+        asl
+        asl
+        asl
+        ora @sep_tmp
         sta (zp_dst), y
         iny
         cpy #192
         bne @sep_tail
         rts
+@sep_tmp: .byte 0
+@sep_cnt: .byte 0
 
 ; ---- Load editor page: doc_buffer → SCREEN rows 0-23 -----------------------
+; Decodes color from bits 6-7 of stored screen codes and sets COLRAM.
+LEP_COLPTR = $22
 load_editor_page:
         ; Calculate doc_buffer address for current_page
         ldx current_page
@@ -2614,29 +2846,58 @@ load_editor_page:
         sta zp_dst
         lda #>SCREEN
         sta zp_dst+1
+        ; COLRAM pointer
+        lda #<COLRAM
+        sta LEP_COLPTR
+        lda #>COLRAM
+        sta LEP_COLPTR+1
 
-        ; Copy 960 bytes = 3 full 256-byte pages + 192 bytes
-        ldx #3
+        ; Decode 960 bytes (3 full pages + 192 tail)
+        lda #3
+        sta @lep_cnt
 @lep_full:
         ldy #0
 @lep_byte:
-        lda (zp_src), y
-        sta (zp_dst), y
+        lda (zp_src), y         ; encoded byte: [color_idx:2 | screen_code:6]
+        pha
+        and #$3F                ; extract screen code
+        sta (zp_dst), y         ; write to SCREEN
+        pla
+        ; Extract color index from bits 6-7
+        rol
+        rol
+        rol
+        and #$03                ; A = color index 0-3
+        tax
+        lda idx_to_color_base, x ; C64 base color
+        sta (LEP_COLPTR), y     ; write to COLRAM
         iny
         bne @lep_byte
         inc zp_src+1
         inc zp_dst+1
-        dex
+        inc LEP_COLPTR+1
+        dec @lep_cnt
         bne @lep_full
-        ; Copy remaining 192 bytes
+        ; Remaining 192 bytes
         ldy #0
 @lep_tail:
         lda (zp_src), y
+        pha
+        and #$3F
         sta (zp_dst), y
+        pla
+        rol
+        rol
+        rol
+        and #$03
+        tax
+        lda idx_to_color_base, x
+        sta (LEP_COLPTR), y
         iny
         cpy #192
         bne @lep_tail
         rts
+@lep_cnt: .byte 0
 
 ; ---- Fill a page (960 bytes) at zp_dst with spaces --------------------------
 fill_page_spaces:
@@ -2675,6 +2936,7 @@ check_page_empty:
         ldy #0
 @cpe_byte:
         lda (zp_src), y
+        and #$3F                    ; mask color bits 6-7
         cmp #$20
         bne @cpe_not_empty
         iny
@@ -2686,6 +2948,7 @@ check_page_empty:
         ldy #0
 @cpe_tail:
         lda (zp_src), y
+        and #$3F                    ; mask color bits 6-7
         cmp #$20
         bne @cpe_not_empty
         iny
@@ -2743,12 +3006,27 @@ draw_status_bar:
         ldx #0
 @dsb_hints:
         lda @dsb_hint_str, x
-        beq @dsb_rts
+        beq @dsb_color_ind
         ora #$80
         sta SCREEN + 24*40 + 10, x
         inx
         bne @dsb_hints
-@dsb_rts:
+@dsb_color_ind:
+        ; Font color indicator: reversed block at col 36 colored with font color
+        lda #$A0                    ; reversed space (filled block)
+        sta SCREEN + 24*40 + 36
+        lda cfg_font_color
+        sta COLRAM + 24*40 + 36
+        ; Background color indicator: reversed block at col 38
+        lda #$A0
+        sta SCREEN + 24*40 + 38
+        lda cfg_bg_color
+        sta COLRAM + 24*40 + 38
+        ; Labels: "F" at 35, "B" at 37
+        lda #(sc_F | $80)
+        sta SCREEN + 24*40 + 35
+        lda #(sc_B | $80)
+        sta SCREEN + 24*40 + 37
         rts
 @dsb_hint_str:
         ; ↑N  ↑O  ↑S    F1  F3  F5  F7  F8
@@ -3176,10 +3454,11 @@ mark_blank_sentinels:
         lda #0
         sta @mbs_prev_blank
 @mbs_loop:
-        ; Check if all 40 bytes of this line are spaces
+        ; Check if all 40 bytes of this line are spaces (masking color bits)
         ldy #0
 @mbs_check:
         lda (zp_src), y
+        and #$3F                    ; mask color bits 6-7
         cmp #$20
         bne @mbs_not_blank
         iny
@@ -3265,6 +3544,9 @@ render_compute_line:
 @ww_not_end:
         ldy #0
         lda (zp_src), y
+        cmp #$FF                ; check sentinel before masking color bits
+        beq @ww_no_sp_sent
+        and #$3F                ; mask color bits 6-7
         cmp #$20
         bne @ww_no_sp
         lda #1
@@ -3273,8 +3555,12 @@ render_compute_line:
         bne @ww_skip_sp
         inc zp_src+1
         jmp @ww_skip_sp
+@ww_no_sp_sent:
+        ; fall through: $FF is not a space
 @ww_no_sp:
         ; ── check for blank-line sentinel ──────────────────────────────────
+        ldy #0
+        lda (zp_src), y         ; re-read unmasked for sentinel check
         cmp #$FF
         bne @ww_not_sentinel
         ; Sentinel found: blank line marker
@@ -3308,9 +3594,10 @@ render_compute_line:
 @ww_m_ok:
         ldy #0
         lda (rnd_wk_csrc), y
-        cmp #$20
+        cmp #$FF                ; sentinel ends word (check before masking)
         beq @ww_m_end
-        cmp #$FF                ; sentinel also ends word
+        and #$3F                ; mask color bits 6-7
+        cmp #$20                ; space ends word
         beq @ww_m_end
         inc rnd_wk_csrc
         bne @ww_m_ok2
@@ -3445,9 +3732,9 @@ render_compute_line:
         jmp @rcl_done
 @rcl_ch_go:
         stx @chi            ; save char index
-        ; look up tile set index from screen code
+        ; look up tile set index from screen code (mask color bits 6-7)
         lda rnd_wk_char, x
-        and #$7F
+        and #$3F
         tay
         lda tile_char_idx, y    ; set_idx (0-43)
         ; look up tile set pointer via table
@@ -3555,6 +3842,59 @@ render_compute_line:
 @tmp_byte:  .byte 0
 @pad:       .byte 0
 @chi:       .byte 0
+
+; ---------------------------------------------------------------------------
+;  render_fill_colbuf — fill a 40-byte color linebuf from rnd_wk_char/x/len
+;  Extracts color index from bits 6-7 of rnd_wk_char[], looks up base C64
+;  color, and writes it to 3 consecutive columns per character.
+;  Input: X preserved, zp_dst = pointer to 40-byte colbuf
+;  Clobbers: A, X, Y
+; ---------------------------------------------------------------------------
+render_fill_top_colbuf:
+        lda #<rnd_top_colbuf
+        sta zp_dst
+        lda #>rnd_top_colbuf
+        sta zp_dst+1
+        jmp render_fill_colbuf
+render_fill_bot_colbuf:
+        lda #<rnd_bot_colbuf
+        sta zp_dst
+        lda #>rnd_bot_colbuf
+        sta zp_dst+1
+        ; fall through
+render_fill_colbuf:
+        ; Fill 40 bytes with default base color ($0F = light gray)
+        lda #$0F
+        ldy #39
+@rfc_clr:
+        sta (zp_dst), y
+        dey
+        bpl @rfc_clr
+        ; For each rendered char, fill 3 columns with its color
+        ldx #0
+@rfc_loop:
+        cpx rnd_wk_len
+        beq @rfc_done
+        ; Extract 2-bit color index from bits 6-7
+        lda rnd_wk_char, x
+        rol
+        rol
+        rol
+        and #$03                ; A = color index 0-3
+        tay
+        lda idx_to_color_base, y ; C64 base color
+        sta rnd_wk_color, x    ; store for later use
+        ; Write to 3 columns at rnd_wk_x[x]
+        ldy rnd_wk_x, x
+        sta (zp_dst), y
+        iny
+        sta (zp_dst), y
+        iny
+        sta (zp_dst), y
+        inx
+        jmp @rfc_loop
+@rfc_done:
+        rts
 
 ; ---------------------------------------------------------------------------
 ;  clamp_target_rows
@@ -3896,6 +4236,7 @@ search_hash_prev:
 @shp_check:
         ldy #0
         lda (zp_src), y
+        and #$3F                    ; mask color bits
         cmp #$23                    ; # screen code
         beq @shp_found
         ; Decrement pointer
@@ -3947,6 +4288,7 @@ search_hash_next:
 @shn_check:
         ldy #0
         lda (zp_src), y
+        and #$3F                    ; mask color bits
         cmp #$23                    ; # screen code
         beq @shn_found
         ; Increment pointer
@@ -4056,6 +4398,15 @@ render_init:
         iny
         cpy #120
         bne @ri_clr_top
+        ; ── Blank color linebufs (default base $0F) ──────────────────────
+        lda #$0F
+        ldy #0
+@ri_clr_colbufs:
+        sta rnd_top_colbuf, y
+        sta rnd_bot_colbuf, y
+        iny
+        cpy #40
+        bne @ri_clr_colbufs
 
         ; ── Zero-fill screen rows 0-11 (480 bytes = 2×256 - 32) ─────────
         lda #<SCREEN
@@ -4091,12 +4442,15 @@ render_init_fill:
         sta zp_dst
         lda #>(SCREEN + 480)
         sta zp_dst+1
+        ; Track COLRAM destination row (starts at row 12)
+        lda #12
+        sta rif_colrow
 
         ; ── Lines 0-3: render into rnd_bot_linebuf, copy to rows 12-23 ───
         ldx #4
 @rif_l4:
         stx rif_cnt
-        jsr ri_render_bot       ; renders to rnd_bot_linebuf, advances zp_src
+        jsr ri_render_bot       ; renders to rnd_bot_linebuf + rnd_bot_colbuf
         lda zp_src
         sta rif_next_lo
         lda zp_src+1
@@ -4106,6 +4460,8 @@ render_init_fill:
         lda #>rnd_bot_linebuf
         sta zp_src+1
         jsr ri_copy120_adv
+        ; Set COLRAM for the 3 rows just copied
+        jsr ri_set_colram_3rows
         lda rif_next_lo
         sta zp_src
         lda rif_next_hi
@@ -4137,6 +4493,14 @@ render_init_fill:
         cpy #COLS
         bne @rif_c40
 
+        ; Set COLRAM for row 24 (outer zone → base color)
+        ldx #39
+@rif_c40_col:
+        lda rnd_bot_colbuf, x
+        sta COLRAM + 24*COLS, x
+        dex
+        bpl @rif_c40_col
+
         lda #1
         sta rnd_bot_row
         rts
@@ -4146,7 +4510,7 @@ render_init_fill:
 ;  render_init_at_position)
 ; ---------------------------------------------------------------------------
 
-        ; helper: render from zp_src into rnd_top_linebuf (zp_dst is saved/restored)
+        ; helper: render from zp_src into rnd_top_linebuf + fill rnd_top_colbuf
 ri_render_top:
         lda zp_dst
         sta ri_dst_save
@@ -4157,13 +4521,14 @@ ri_render_top:
         lda #>rnd_top_linebuf
         sta zp_dst+1
         jsr render_compute_line
+        jsr render_fill_top_colbuf
         lda ri_dst_save
         sta zp_dst
         lda ri_dst_save+1
         sta zp_dst+1
         rts
 
-        ; helper: render from zp_src into rnd_bot_linebuf (zp_dst saved/restored)
+        ; helper: render from zp_src into rnd_bot_linebuf + fill rnd_bot_colbuf
 ri_render_bot:
         lda zp_dst
         sta ri_dst_save
@@ -4174,6 +4539,7 @@ ri_render_bot:
         lda #>rnd_bot_linebuf
         sta zp_dst+1
         jsr render_compute_line
+        jsr render_fill_bot_colbuf
         lda ri_dst_save
         sta zp_dst
         lda ri_dst_save+1
@@ -4200,7 +4566,83 @@ ri_copy120_adv:
 rif_cnt:      .byte 0
 rif_next_lo:  .byte 0
 rif_next_hi:  .byte 0
+rif_colrow:   .byte 0
 ri_dst_save:  .byte 0, 0
+
+; ---------------------------------------------------------------------------
+;  ri_set_colram_3rows — set COLRAM for 3 screen rows from rnd_bot_colbuf
+;  Uses rif_colrow as starting row number (0-24).  Applies zone mapping:
+;  rows 9-15 get light counterpart, others get base color.
+;  Advances rif_colrow by 3.  Clobbers zp_src.
+; ---------------------------------------------------------------------------
+ri_set_colram_3rows:
+        lda rif_colrow
+        sta @sc3_row
+        lda #3
+        sta @sc3_cnt
+@sc3_loop:
+        ; Compute COLRAM address for this row: COLRAM + row*40
+        lda #0
+        sta zp_src+1
+        lda @sc3_row
+        asl             ; *2
+        asl             ; *4
+        asl             ; *8
+        sta zp_src
+        asl             ; *16
+        rol zp_src+1
+        asl             ; *32
+        rol zp_src+1
+        clc
+        adc zp_src      ; *40 lo
+        sta zp_src
+        lda zp_src+1
+        adc #0
+        sta zp_src+1
+        ; Add COLRAM base
+        clc
+        lda zp_src
+        adc #<COLRAM
+        sta zp_src
+        lda zp_src+1
+        adc #>COLRAM
+        sta zp_src+1
+        ; Determine if this row is in the inner zone (rows 9-15)
+        lda @sc3_row
+        cmp #9
+        bcc @sc3_base       ; row < 9 → outer → base
+        cmp #16
+        bcs @sc3_base       ; row >= 16 → outer → base
+        ; Inner zone: use light colors
+        ldy #39
+@sc3_light:
+        lda rnd_bot_colbuf, y
+        tax
+        lda color_to_light, x
+        sta (zp_src), y
+        dey
+        bpl @sc3_light
+        jmp @sc3_next
+@sc3_base:
+        ; Outer zone: use base colors directly
+        ldy #39
+@sc3_base_l:
+        lda rnd_bot_colbuf, y
+        sta (zp_src), y
+        dey
+        bpl @sc3_base_l
+@sc3_next:
+        inc @sc3_row
+        dec @sc3_cnt
+        bne @sc3_loop
+        ; Advance rif_colrow by 3
+        lda rif_colrow
+        clc
+        adc #3
+        sta rif_colrow
+        rts
+@sc3_row: .byte 0
+@sc3_cnt: .byte 0
 
 ; ---------------------------------------------------------------------------
 ;  render_advance_top — advance top cursor one tile row forward
@@ -4261,6 +4703,7 @@ render_advance_top:
         lda #>rnd_top_linebuf
         sta zp_dst+1
         jsr render_compute_line
+        jsr render_fill_top_colbuf
         lda zp_src
         sta rnd_top_next_lo
         lda zp_src+1
@@ -4307,6 +4750,7 @@ render_advance_bot:
         lda #>rnd_bot_linebuf
         sta zp_dst+1
         jsr render_compute_line
+        jsr render_fill_bot_colbuf
         lda zp_src
         sta rnd_bot_next_lo
         lda zp_src+1
@@ -4321,7 +4765,9 @@ render_advance_bot:
 ; ---------------------------------------------------------------------------
 render_retreat_top:
         dec rnd_top_row
-        bpl @rrt_done
+        bmi @rrt_under
+        jmp @rrt_done
+@rrt_under:
         ; underflowed: was 0, now $FF
         lda rnd_hist_count
         beq @rrt_clamp      ; at document start, clamp to 0
@@ -4355,6 +4801,7 @@ render_retreat_top:
         lda #>rnd_top_linebuf
         sta zp_dst+1
         jsr render_compute_line
+        jsr render_fill_top_colbuf
         lda zp_src
         sta rnd_top_next_lo
         lda zp_src+1
@@ -4375,15 +4822,13 @@ render_retreat_top:
 @rrt_skip_ok:
         lda #2                      ; retreat to tile row 2 of previous blank line
         sta rnd_top_row
-        ; Reset doc pointers so the next skip-reaching-0 render produces
-        ; the initial top line (line 0 for fresh start, line L for resume)
         lda init_top_lo
         sta rnd_top_lo
         sta rnd_top_next_lo
         lda init_top_hi
         sta rnd_top_hi
         sta rnd_top_next_hi
-        ; Clear linebuf (blank tile-line)
+        ; Clear linebuf (blank tile-line) and colbuf
         lda #0
         ldy #0
 @rrt_clr:
@@ -4391,6 +4836,13 @@ render_retreat_top:
         iny
         cpy #120
         bne @rrt_clr
+        lda #$0F
+        ldy #0
+@rrt_clr_col:
+        sta rnd_top_colbuf, y
+        iny
+        cpy #40
+        bne @rrt_clr_col
         rts
 @rrt_done:
         rts
@@ -4430,6 +4882,7 @@ render_retreat_bot:
         lda #>rnd_bot_linebuf
         sta zp_dst+1
         jsr render_compute_line
+        jsr render_fill_bot_colbuf
         lda zp_src
         sta rnd_bot_next_lo
         lda zp_src+1
@@ -4469,6 +4922,15 @@ cfg_accel_curv: .byte $81,$8C,$CC,$CC,$CD       ; 1.10 (default)
 save_buf_a: .res 40                     ; original SCREEN+256..295
 save_buf_b: .res 40                     ; original SCREEN+512..551
 save_buf_c: .res 40                     ; original SCREEN+768..807
+
+; COLRAM overlap save buffers for scroll_screen_down (3×40 bytes)
+col_save_a: .res 40
+col_save_b: .res 40
+col_save_c: .res 40
+
+; Configurable colors
+cfg_font_color: .byte $0F               ; editor font color (C64 value, default light gray)
+cfg_bg_color:   .byte $0B               ; scroll background color (C64 value, default dark gray)
 
 ; ---------------------------------------------------------------------------
 ;  Variable scroll boundaries (set by prepare_scroll_text)
@@ -4542,6 +5004,26 @@ _6 = $36
 _7 = $37
 _8 = $38
 _9 = $39
+
+; ---------------------------------------------------------------------------
+;  Color system lookup tables
+; ---------------------------------------------------------------------------
+; 2-bit color index → C64 base color (outer zone / editor)
+idx_to_color_base:  .byte $0F, $02, $06, $05   ; light gray, red, blue, green
+; 2-bit color index → C64 light color (reading zone)
+idx_to_color_light: .byte $01, $0A, $0E, $0D   ; white, light red, light blue, light green
+; C64 color value → light counterpart (for zone boundary remap)
+color_to_light:
+        .byte $00,$01,$0A,$03,$04,$0D,$0E,$07   ; 0-7
+        .byte $08,$09,$0A,$0B,$0C,$0D,$0E,$01   ; 8-15
+; C64 color value → base counterpart (for zone boundary remap)
+color_to_base:
+        .byte $00,$0F,$02,$03,$04,$05,$06,$07   ; 0-7
+        .byte $08,$09,$02,$0B,$0C,$05,$06,$0F   ; 8-15
+; C64 color value → 2-bit color index (for editor save encoding)
+color_to_idx:
+        .byte 0,0,1,0,0,3,2,0                  ; 0-7
+        .byte 0,0,1,0,0,3,2,0                  ; 8-15
 
 ; BASIC ROM 5-byte float constants
 fp_256:         .byte $89,$00,$00,$00,$00       ; 256.0 (for 8.8 conversion)
@@ -5084,6 +5566,8 @@ doc_buffer:     .res 9600 + 1000    ; 10 pages × 960 bytes + 1000 scroll trail
 ; ---------------------------------------------------------------------------
 rnd_top_linebuf: .res 120           ; 3 tile rows × 40 cols for current top rendered line
 rnd_bot_linebuf: .res 120           ; 3 tile rows × 40 cols for current bottom rendered line
+rnd_top_colbuf:  .res 40            ; base color per column for top rendered line
+rnd_bot_colbuf:  .res 40            ; base color per column for bottom rendered line
 rnd_hist_lo:    .res 240            ; top history ring: lo byte of doc ptr at line starts
 rnd_hist_hi:    .res 240            ; top history ring: hi byte
 rnd_hist_head:  .res 1              ; top ring write index (0-239)
@@ -5094,8 +5578,9 @@ rnd_hist_bot_head:.res 1            ; bot ring write index (0-239)
 rnd_hist_bot_count:.res 1           ; bot ring valid entries
 
 ; Word-wrap temporaries (used only inside render_compute_line)
-rnd_wk_char:    .res 13             ; screen codes of chars on current rendered line
+rnd_wk_char:    .res 13             ; screen codes of chars on current rendered line (with color bits 6-7)
 rnd_wk_x:       .res 13             ; x tile-positions of each char (after centering)
+rnd_wk_color:   .res 13             ; C64 base color per rendered char
 rnd_wk_len:     .res 1              ; number of chars on line (0-13)
 rnd_wk_wid:     .res 1              ; running rendered width (tile columns)
 rnd_wk_wlen:    .res 1              ; current word length (chars)
