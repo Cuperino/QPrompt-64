@@ -1286,9 +1286,9 @@ scroll_screen_up:
         sta SCREEN+512+i
         .endrepeat
 
-        .repeat 256, i
-        lda SCREEN+COLS+744+i
-        sta SCREEN+744+i
+        .repeat 192, i
+        lda SCREEN+COLS+768+i
+        sta SCREEN+768+i
         .endrepeat
 
         ; Fill bottom row from render engine bot cursor
