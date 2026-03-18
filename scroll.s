@@ -1437,12 +1437,14 @@ scroll_screen_down:
         sta SCREEN+COLS + 255 - i
         .endrepeat
 
-        ; ── COLRAM Page 0: shift down (reverse order) ────────────────────
+        ; ── COLRAM Page 0: shift down (reverse order, semi-unrolled) ──────
         ldx #255
 @ssd_cr0:
+        .repeat 8
         lda COLRAM, x
         sta COLRAM+COLS, x
         dex
+        .endrepeat
         cpx #$FF
         bne @ssd_cr0
 
@@ -1505,14 +1507,8 @@ scroll_screen_down:
         bpl @ssd_newcol
 
 @ssd_page1:
-        ; ── Page 1: COLRAM shift first (slow), then SCREEN shift (fast) ──
-        ldx #215
-@ssd_cr1:
-        lda COLRAM+256+COLS, x
-        sta COLRAM+256+COLS+COLS, x
-        dex
-        cpx #$FF
-        bne @ssd_cr1
+        ; ── Page 1: COLRAM (unrolled sub) then SCREEN (unrolled) ─────────
+        jsr ssd_colram_p1_upper
         ldx #39
 @ssd_cr1r:
         lda col_save_a, x
@@ -1528,14 +1524,8 @@ scroll_screen_down:
         sta SCREEN+256+COLS + i
         .endrepeat
 
-        ; ── Page 2: COLRAM first, then SCREEN ────────────────────────────
-        ldx #215
-@ssd_cr2:
-        lda COLRAM+512+COLS, x
-        sta COLRAM+512+COLS+COLS, x
-        dex
-        cpx #$FF
-        bne @ssd_cr2
+        ; ── Page 2: COLRAM (unrolled sub) then SCREEN (unrolled) ─────────
+        jsr ssd_colram_p2_upper
         ldx #39
 @ssd_cr2r:
         lda col_save_b, x
@@ -1551,14 +1541,8 @@ scroll_screen_down:
         sta SCREEN+512+COLS + i
         .endrepeat
 
-        ; ── Page 3: COLRAM first, then SCREEN ────────────────────────────
-        ldx #151
-@ssd_cr3:
-        lda COLRAM+768+COLS, x
-        sta COLRAM+768+COLS+COLS, x
-        dex
-        cpx #$FF
-        bne @ssd_cr3
+        ; ── Page 3: COLRAM (unrolled sub) then SCREEN (unrolled) ─────────
+        jsr ssd_colram_p3_upper
         ldx #39
 @ssd_cr3r:
         lda col_save_c, x
@@ -5527,6 +5511,37 @@ spr_left_tri:   ; at $3040
 
 ; T39-T255 zero-filled to reach 256 tiles
 .res (256-39)*8, 0
+
+; =============================================================================
+;  SCROLL2 segment — unrolled COLRAM down-shift subroutines
+;  Placed in the gap between CODE and SPRITES ($271E-$36FF)
+; =============================================================================
+.segment "SCROLL2"
+
+; Fully unrolled upper-byte COLRAM shift for scroll_screen_down pages 1-3.
+; Each copies the upper N bytes down by COLS (40) in reverse order.
+; The overlap restores (40 bytes each) stay as loops in the caller.
+
+ssd_colram_p1_upper:
+        .repeat 216, i
+        lda COLRAM+256+COLS + 215 - i
+        sta COLRAM+256+COLS+COLS + 215 - i
+        .endrepeat
+        rts
+
+ssd_colram_p2_upper:
+        .repeat 216, i
+        lda COLRAM+512+COLS + 215 - i
+        sta COLRAM+512+COLS+COLS + 215 - i
+        .endrepeat
+        rts
+
+ssd_colram_p3_upper:
+        .repeat 152, i
+        lda COLRAM+768+COLS + 151 - i
+        sta COLRAM+768+COLS+COLS + 151 - i
+        .endrepeat
+        rts
 
 ; =============================================================================
 ;  BSS segment — runtime-only document buffer (not stored in PRG file)
