@@ -1313,7 +1313,9 @@ scroll_screen_up:
         sta COLRAM+768+i
         .endrepeat
 
-        ; ── Remap zone boundary colors after shift ───────────────────────
+        ; ── PAL only: remap zone boundary colors after shift ───────────────
+        lda is_ntsc
+        bne @ssu_skip_remap
         ; Row 8 moved from inner(9)→outer(8): light → base
         ldx #39
 @ssu_remap8:
@@ -1334,6 +1336,7 @@ scroll_screen_up:
         sta COLRAM + 15*COLS, x
         dex
         bpl @ssu_remap15
+@ssu_skip_remap:
 
         ; Fill bottom row from render engine bot cursor
         lda rnd_bot_row
@@ -1364,13 +1367,24 @@ scroll_screen_up:
         iny
         .endrepeat
 
-        ; Colour for new bottom row (row 24 = outer zone → base color)
+        ; Colour for new bottom row
+        lda is_ntsc
+        bne @ssu_newcol_ntsc
+        ; PAL: per-character base color from colbuf
         ldx #39
 @ssu_newcol:
         lda rnd_bot_colbuf, x
         sta COLRAM + (ROWS-1)*COLS, x
         dex
         bpl @ssu_newcol
+        jmp @ssu_newcol_done
+@ssu_newcol_ntsc:
+        ; NTSC: static WHITE
+        lda #WHITE
+        .repeat 40, i
+        sta COLRAM + (ROWS-1)*COLS + i
+        .endrepeat
+@ssu_newcol_done:
 
         jsr render_advance_bot
         jsr render_advance_top
@@ -1482,36 +1496,34 @@ scroll_screen_down:
         sta ssd_fill_blank
 
 @ssd_fill_color:
-        ; Colour for new top row (row 0 = outer zone → base color from colbuf)
+        ; Colour for new top row
+        lda is_ntsc
+        bne @ssd_newcol_ntsc
+        ; PAL: per-character base color from colbuf
         ldx #39
 @ssd_newcol:
         lda rnd_top_colbuf, x
         sta COLRAM, x
         dex
         bpl @ssd_newcol
+        jmp @ssd_page1
+@ssd_newcol_ntsc:
+        ; NTSC: static WHITE
+        lda #WHITE
+        .repeat 40, i
+        sta COLRAM + i
+        .endrepeat
 
 @ssd_page1:
-        ; ── Process pages in reverse order (3→2→1) so bottom pages ───────
-        ; ── finish first, before VIC scans those rows.                 ───
-        ; ── Pages 2-3 read directly (page 0 hasn't corrupted them).   ───
-        ; ── Page 1 uses save buffers (page 0 overwrote [256..295]).   ───
-
-        ; ── Page 3: COLRAM (unrolled sub) then SCREEN (unrolled) ─────────
-        jsr ssd_colram_p3
+        ; ── SCREEN shifts (always, reverse page order) ───────────────────
         .repeat 192, i
         lda SCREEN+768 + 191 - i
         sta SCREEN+768+COLS + 191 - i
         .endrepeat
-
-        ; ── Page 2: COLRAM (unrolled sub) then SCREEN (unrolled) ─────────
-        jsr ssd_colram_p2
         .repeat 256, i
         lda SCREEN+512 + 255 - i
         sta SCREEN+512+COLS + 255 - i
         .endrepeat
-
-        ; ── Page 1: COLRAM (unrolled sub) then SCREEN (unrolled) ─────────
-        jsr ssd_colram_p1
         .repeat 216, i
         lda SCREEN+256 + 255 - i
         sta SCREEN+256+COLS + 255 - i
@@ -1521,18 +1533,21 @@ scroll_screen_down:
         sta SCREEN+256+COLS + i
         .endrepeat
 
-        ; ── Remap zone boundary colors after down shift ──────────────────
-        ; Row 9 moved from outer(8)→inner(9): base → light
+        ; ── PAL only: COLRAM shifts + zone remap ────────────────────────
+        lda is_ntsc
+        bne @ssd_skip_colram
+        jsr ssd_colram_p3
+        jsr ssd_colram_p2
+        jsr ssd_colram_p1
         ldx #39
 @ssd_remap9:
         lda COLRAM + 9*COLS, x
-        and #$0F                    ; COLRAM is 4-bit; mask garbage high nibble
+        and #$0F
         tay
         lda color_to_light, y
         sta COLRAM + 9*COLS, x
         dex
         bpl @ssd_remap9
-        ; Row 16 moved from inner(15)→outer(16): light → base
         ldx #39
 @ssd_remap16:
         lda COLRAM + 16*COLS, x
@@ -1542,6 +1557,7 @@ scroll_screen_down:
         sta COLRAM + 16*COLS, x
         dex
         bpl @ssd_remap16
+@ssd_skip_colram:
 
         ; ── Retreats ────────────────────────────────────────────────────
         lda ssd_fill_blank
@@ -1589,13 +1605,21 @@ scroll_screen_down:
         sta SCREEN, y
         iny
         .endrepeat
-        ; Colour for deferred fill (row 0 = outer → base from colbuf)
+        ; Colour for deferred fill
+        lda is_ntsc
+        bne @ssd_df_col_ntsc
         ldx #39
 @ssd_df_col:
         lda rnd_top_colbuf, x
         sta COLRAM, x
         dex
         bpl @ssd_df_col
+        rts
+@ssd_df_col_ntsc:
+        lda #WHITE
+        .repeat 40, i
+        sta COLRAM + i
+        .endrepeat
         rts
 @ssd_df_blank:
         lda #$00
@@ -2923,7 +2947,7 @@ draw_status_bar:
         ora #$80
         sta SCREEN + 24*40 + 8
 
-        ; Shortcut hints at cols 10-33: ↑N ↑O ↑S ↑C  F3 F5 F7 F8
+        ; Shortcut hints at cols 10-30: ↑N ↑O ↑S F1 F3 F5 F7 F8
         ; (↑ = up-arrow $1E as Ctrl indicator; ↑C = Ctrl+CLR)
         ldx #0
 @dsb_hints:
@@ -2934,25 +2958,27 @@ draw_status_bar:
         inx
         bne @dsb_hints
 @dsb_color_ind:
-        ; Font color indicator: reversed block at col 36 colored with font color
+        ; Font color indicator: "F4" label at 34-35, reversed block at col 36
         lda #$A0                    ; reversed space (filled block)
         sta SCREEN + 24*40 + 36
         lda cfg_font_color
         sta COLRAM + 24*40 + 36
-        ; Background color indicator: reversed block at col 38
+        ; Background color indicator: "2" label at 37, reversed block at col 38
         lda #$A0
         sta SCREEN + 24*40 + 38
         lda cfg_bg_color
         sta COLRAM + 24*40 + 38
-        ; Labels: "F" at 35, "B" at 37
+        ; Labels: "F4" at 34-35, "2" at 37
         lda #(sc_F | $80)
+        sta SCREEN + 24*40 + 34
+        lda #($34 | $80)            ; "4"
         sta SCREEN + 24*40 + 35
-        lda #(sc_B | $80)
+        lda #($32 | $80)            ; "2"
         sta SCREEN + 24*40 + 37
         rts
 @dsb_hint_str:
-        ; ↑N  ↑O  ↑S    F1  F3  F5  F7  F8
-        .byte $1E,sc_N,__,$1E,sc_O,__,$1E,sc_S,__,__,__
+        ; ↑N  ↑O  ↑S  F1  F3  F5  F7  F8
+        .byte $1E,sc_N,__,$1E,sc_O,__,$1E,sc_S,__
         .byte sc_F,$31,__,sc_F,$33,__,sc_F,$35,__,sc_F,$37,__,sc_F,$38,0
 
 ; ---- Dialog system ----------------------------------------------------------
@@ -4382,8 +4408,11 @@ render_init_fill:
         lda #>rnd_bot_linebuf
         sta zp_src+1
         jsr ri_copy120_adv
-        ; Set COLRAM for the 3 rows just copied
+        ; Set COLRAM for the 3 rows just copied (PAL only)
+        lda is_ntsc
+        bne @rif_skip_col
         jsr ri_set_colram_3rows
+@rif_skip_col:
         lda rif_next_lo
         sta zp_src
         lda rif_next_hi
@@ -4415,13 +4444,16 @@ render_init_fill:
         cpy #COLS
         bne @rif_c40
 
-        ; Set COLRAM for row 24 (outer zone → base color)
+        ; Set COLRAM for row 24 (PAL: per-char base color; NTSC: skip)
+        lda is_ntsc
+        bne @rif_skip_r24col
         ldx #39
 @rif_c40_col:
         lda rnd_bot_colbuf, x
         sta COLRAM + 24*COLS, x
         dex
         bpl @rif_c40_col
+@rif_skip_r24col:
 
         lda #1
         sta rnd_bot_row
