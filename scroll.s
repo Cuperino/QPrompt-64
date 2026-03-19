@@ -787,20 +787,21 @@ config_screen:
 
 ; --- Update just the base speed value on screen ---
 @update_speed:
-        lda #<(SCREEN + 2*40 + 20)
-        ldx #<cfg_base_speed
+        lda #<(SCREEN + 5*40 + 20)
+        sta zp_dst
+        lda #>(SCREEN + 5*40 + 20)
+        sta zp_dst+1
+        lda #<cfg_base_speed
         ldy #>cfg_base_speed
-        bne @update_val             ; always taken
+        jmp display_fixed2
 ; --- Update just the curvature value on screen ---
 @update_curv:
-        lda #<(SCREEN + 4*40 + 20)
-        ldx #<cfg_accel_curv
-        ldy #>cfg_accel_curv
-@update_val:
+        lda #<(SCREEN + 7*40 + 20)
         sta zp_dst
-        lda #>(SCREEN + 2*40 + 20)  ; high byte same for rows 2 and 4
+        lda #>(SCREEN + 7*40 + 20)
         sta zp_dst+1
-        txa
+        lda #<cfg_accel_curv
+        ldy #>cfg_accel_curv
         jmp display_fixed2
 
 ; --- Draw config screen ---
@@ -817,41 +818,11 @@ config_screen:
         .endrepeat
         bne @dcs
 
-        ; Row 2: "BASE SPEED:"
-        ldx #0
-@bs_l:  lda @str_base_speed, x
-        beq @bs_done
-        sta SCREEN + 2*40 + 2, x
-        inx
-        bne @bs_l
-@bs_done:
-        ; Display baseSpeed value at row 2, col 20
-        lda #<(SCREEN + 2*40 + 20)
-        sta zp_dst
-        lda #>(SCREEN + 2*40 + 20)
-        sta zp_dst+1
-        lda #<cfg_base_speed
-        ldy #>cfg_base_speed
-        jsr display_fixed2
+        ; Display values
+        jsr @update_speed
+        jsr @update_curv
 
-        ; Row 4: "ACCEL CURVE:"
-        ldx #0
-@ac_l:  lda @str_accel_curv, x
-        beq @ac_done
-        sta SCREEN + 4*40 + 2, x
-        inx
-        bne @ac_l
-@ac_done:
-        ; Display curvature value at row 4, col 20
-        lda #<(SCREEN + 4*40 + 20)
-        sta zp_dst
-        lda #>(SCREEN + 4*40 + 20)
-        sta zp_dst+1
-        lda #<cfg_accel_curv
-        ldy #>cfg_accel_curv
-        jsr display_fixed2
-
-        ; Draw all config strings via table
+        ; Draw all config strings (including labels) via table
         ldx #0
 @draw_strs:
         lda @str_tbl_lo, x
@@ -875,7 +846,7 @@ config_screen:
 @ds_savx:
         ldx #0
         inx
-        cpx #8
+        cpx #10
         bne @draw_strs
         ; Set all color RAM to white
         lda #WHITE
@@ -949,17 +920,21 @@ config_screen:
 
 ; String/screen address tables for table-driven config renderer
 @str_tbl_lo:
+        .byte <@str_base_speed, <@str_accel_curv
         .byte <@str_instr1, <@str_instr2, <@str_instr4, <@str_instr3
         .byte <@str_velocity, <@str_title, <@str_copyright, <@str_license
 @str_tbl_hi:
+        .byte >@str_base_speed, >@str_accel_curv
         .byte >@str_instr1, >@str_instr2, >@str_instr4, >@str_instr3
         .byte >@str_velocity, >@str_title, >@str_copyright, >@str_license
 @scr_tbl_lo:
-        .byte <(SCREEN+8*40+3), <(SCREEN+9*40+3), <(SCREEN+11*40+3), <(SCREEN+12*40+3)
-        .byte <(SCREEN+14*40+2), <(SCREEN+20*40+14), <(SCREEN+22*40+1), <(SCREEN+23*40+4)
+        .byte <(SCREEN+5*40+2), <(SCREEN+7*40+2)
+        .byte <(SCREEN+9*40+3), <(SCREEN+10*40+3), <(SCREEN+12*40+3), <(SCREEN+13*40+3)
+        .byte <(SCREEN+15*40+2), <(SCREEN+2*40+14), <(SCREEN+22*40+1), <(SCREEN+23*40+4)
 @scr_tbl_hi:
-        .byte >(SCREEN+8*40+3), >(SCREEN+9*40+3), >(SCREEN+11*40+3), >(SCREEN+12*40+3)
-        .byte >(SCREEN+14*40+2), >(SCREEN+20*40+14), >(SCREEN+22*40+1), >(SCREEN+23*40+4)
+        .byte >(SCREEN+5*40+2), >(SCREEN+7*40+2)
+        .byte >(SCREEN+9*40+3), >(SCREEN+10*40+3), >(SCREEN+12*40+3), >(SCREEN+13*40+3)
+        .byte >(SCREEN+15*40+2), >(SCREEN+2*40+14), >(SCREEN+22*40+1), >(SCREEN+23*40+4)
 
 
 ; ---- Display float as "N.NN" -----------------------------------------------
