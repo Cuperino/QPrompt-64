@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QPrompt 64</title>
+  <style>
+    body { margin: 0; background: #000; overflow: hidden; }
+    #emulator { width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="emulator"></div>
+  <script>
+    EJS_player = '#emulator';
+    EJS_core = 'c64';
+    EJS_gameUrl = 'scroll.prg';
+    EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
+    EJS_gameName = 'QPrompt 64';
+    EJS_startOnLoaded = true;
+    EJS_defaultOptions = {
+      keyboardInput: 'enabled',
+      lockMouse: 'disabled'
+    };
+  </script>
+  <script src="https://cdn.emulatorjs.org/stable/data/loader.js"></script>
+</body>
+</html>
