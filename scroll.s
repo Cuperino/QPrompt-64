@@ -378,7 +378,7 @@ enter_scroll_mode:
         jsr scroll_screen_down
         jmp @forever
 @exit_scroll:
-        ; enter_config: 1=F1, 2=F3, 3=Ctrl+T, 4=search prev #, 5=search next #
+        ; enter_config: 1=F1, 2=F3, 3=T, 4=search prev #, 5=search next #
         lda enter_config
         cmp #3
         beq @scroll_reset
@@ -416,7 +416,7 @@ enter_scroll_mode:
         jmp main_dispatch
 
 @scroll_reset:
-        ; --- Ctrl+T: reset scroll to start of document ---
+        ; --- T: reset scroll to start of document ---
         lda #0
         sta enter_config
         sta scroll_has_saved
@@ -594,12 +594,12 @@ PETSCII_F5      = $87
 config_screen_init:
         ; Initialize config floats from ROM defaults
         ldx #4
-@cp_bs: lda fp_0_15, x
+@cp_bs: lda fp_0_20, x
         sta cfg_base_speed, x
         dex
         bpl @cp_bs
         ldx #4
-@cp_ac: lda fp_1_10, x
+@cp_ac: lda fp_1_60, x
         sta cfg_accel_curv, x
         dex
         bpl @cp_ac
@@ -882,25 +882,6 @@ config_screen:
         inx
         bne @in5
 @in5d:
-        ; Row 6: show "PAL" or "NTSC"
-        lda is_ntsc
-        bne @show_ntsc
-        ldx #0
-@pal_l: lda @str_pal, x
-        beq @sys_done
-        sta SCREEN + 6*40 + 2, x
-        inx
-        bne @pal_l
-        beq @sys_done
-@show_ntsc:
-        ldx #0
-@ntsc_l: lda @str_ntsc, x
-        beq @sys_done
-        sta SCREEN + 6*40 + 2, x
-        inx
-        bne @ntsc_l
-@sys_done:
-
         ; Set all color RAM to white
         lda #WHITE
         ldx #0
@@ -964,10 +945,6 @@ config_screen:
         .byte sc_F,$33,__,$3D,__,sc_E,sc_D,sc_I,sc_T,sc_O,sc_R,0
 @str_title:
         .byte sc_Q,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,__,$36,$34,0
-@str_pal:
-        .byte sc_S,sc_Y,sc_S,sc_T,sc_E,sc_M,$3A,__,sc_P,sc_A,sc_L,0
-@str_ntsc:
-        .byte sc_S,sc_Y,sc_S,sc_T,sc_E,sc_M,$3A,__,sc_N,sc_T,sc_S,sc_C,0
 
 
 ; ---- Display float as "N.NN" -----------------------------------------------
@@ -1768,16 +1745,13 @@ read_keyboard:
         sta enter_config
         rts
 @not_f3:
-        ; Check for Ctrl+T (T matrix code $16) → reset to start
+        ; Check for T (matrix code $16) → reset to start
         cmp #$16
-        bne @not_ctrl_t
-        lda SHIFT_FLAG
-        and #$04                    ; bit 2 = CTRL
-        beq @not_ctrl_t
+        bne @not_t
         lda #3
         sta enter_config            ; 3 = reset to start
         rts
-@not_ctrl_t:
+@not_t:
         ; Check for comma/< (matrix code $2F) → search previous #
         cmp #$2F
         bne @not_comma
@@ -3214,12 +3188,12 @@ str_load_fname:
 
 
 ; ---- Initialize document buffer from text_data --------------------------------
-; Copies the instruction text (48 lines = 1920 bytes = 2 pages exactly)
+; Copies the instruction text (72 lines = 2880 bytes = 3 pages exactly)
 ; into doc_buffer.  No padding needed.
-; Sets total_pages=2, current_page=0, cursor_x/y=0.
+; Sets total_pages=3, current_page=0, cursor_x/y=0.
 ; ---------------------------------------------------------------------------
 init_document:
-        ; Source = text_data (48 lines × 40 bytes = 1920 bytes)
+        ; Source = text_data (72 lines × 40 bytes = 2880 bytes)
         lda #<text_data
         sta zp_src
         lda #>text_data
@@ -3231,8 +3205,8 @@ init_document:
         lda #>doc_buffer
         sta zp_dst+1
 
-        ; Copy 1920 bytes = 7 × 256 + 128
-        ldx #7
+        ; Copy 2880 bytes = 11 × 256 + 64
+        ldx #11
 @id_page:
         ldy #0
 @id_byte:
@@ -3245,17 +3219,17 @@ init_document:
         dex
         bne @id_page
 
-        ; Copy remaining 128 bytes
+        ; Copy remaining 64 bytes
         ldy #0
 @id_tail:
         lda (zp_src), y
         sta (zp_dst), y
         iny
-        cpy #128
+        cpy #64
         bne @id_tail
 
         ; Set editor state
-        lda #2
+        lda #3
         sta total_pages
         lda #0
         sta current_page
@@ -4983,8 +4957,8 @@ color_to_idx:
 fp_256:         .byte $89,$00,$00,$00,$00       ; 256.0 (for 8.8 conversion)
 fp_0_01:        .byte $7A,$23,$D7,$0A,$3D       ; 0.01 (baseSpeed step)
 fp_0_05:        .byte $7C,$4C,$CC,$CC,$CD       ; 0.05 (curvature step)
-fp_1_10:        .byte $81,$0C,$CC,$CC,$CD       ; 1.10 (initial curvature)
-fp_0_15:        .byte $7E,$19,$99,$99,$9A       ; 0.15 (initial baseSpeed)
+fp_1_60:        .byte $81,$4C,$CC,$CC,$CD       ; 1.60 (initial curvature)
+fp_0_20:        .byte $7E,$4C,$CC,$CC,$CD       ; 0.20 (initial baseSpeed)
 fp_0_50:        .byte $80,$00,$00,$00,$00       ; 0.50 (min curvature / rounding)
 fp_2_0:         .byte $82,$00,$00,$00,$00       ; 2.0 (max curvature)
 fp_4_0:         .byte $83,$00,$00,$00,$00       ; 4.0 (max baseSpeed)
@@ -5023,7 +4997,7 @@ page_addr_hi:
 .define BLK __,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
 
 text_data:
-; --- Page 1: Intro + Config + Editor controls ---
+; --- Page 1: Intro + Scroll + Editor controls ---
 ;         1234567890123456789012345678901234567890
 ; Line 0: "               QPROMPT 64              "
 .byte __,__,__,__,__,__,__,__,__,__,__,__,__,__,__,sc_Q,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,__,_6,_4,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
@@ -5039,78 +5013,125 @@ text_data:
 .byte __,sc_C,sc_O,sc_M,sc_M,sc_O,sc_D,sc_O,sc_R,sc_E,__,_6,_4,_d,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
 ; Line 6: blank
 .byte BLK
-; Line 7: " CONFIG SCREEN:                        "
-.byte __,sc_C,sc_O,sc_N,sc_F,sc_I,sc_G,__,sc_S,sc_C,sc_R,sc_E,sc_E,sc_N,_co,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 7: " # PROMPTER SCREEN:                    "
+.byte __,$23,__,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,sc_E,sc_R,__,sc_S,sc_C,sc_R,sc_E,sc_E,sc_N,_co,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
 ; Line 8: blank
 .byte BLK
-; Line 9: "  UP/DOWN     ADJUST BASE SPEED        "
-.byte __,__,sc_U,sc_P,_sl,sc_D,sc_O,sc_W,sc_N,__,__,__,__,__,sc_A,sc_D,sc_J,sc_U,sc_S,sc_T,__,sc_B,sc_A,sc_S,sc_E,__,sc_S,sc_P,sc_E,sc_E,sc_D,__,__,__,__,__,__,__,__,__
-; Line 10: "  LEFT/RIGHT  ADJUST CURVE             "
-.byte __,__,sc_L,sc_E,sc_F,sc_T,_sl,sc_R,sc_I,sc_G,sc_H,sc_T,__,__,sc_A,sc_D,sc_J,sc_U,sc_S,sc_T,__,sc_C,sc_U,sc_R,sc_V,sc_E,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 11: "  RETURN      START                    "
-.byte __,__,sc_R,sc_E,sc_T,sc_U,sc_R,sc_N,__,__,__,__,__,__,sc_S,sc_T,sc_A,sc_R,sc_T,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 12: "  F3          OPEN EDITOR              "
-.byte __,__,sc_F,_3,__,__,__,__,__,__,__,__,__,__,sc_O,sc_P,sc_E,sc_N,__,sc_E,sc_D,sc_I,sc_T,sc_O,sc_R,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 13: "  F5          START SCROLL             "
-.byte __,__,sc_F,_5,__,__,__,__,__,__,__,__,__,__,sc_S,sc_T,sc_A,sc_R,sc_T,__,sc_S,sc_C,sc_R,sc_O,sc_L,sc_L,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 14: blank
-.byte BLK
-; Line 15: " EDITOR:                               "
-.byte __,sc_E,sc_D,sc_I,sc_T,sc_O,sc_R,_co,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 16: blank
-.byte BLK
-; Line 17: "  TYPE TO ENTER TEXT.                   "
-.byte __,__,sc_T,sc_Y,sc_P,sc_E,__,sc_T,sc_O,__,sc_E,sc_N,sc_T,sc_E,sc_R,__,sc_T,sc_E,sc_X,sc_T,_d,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 18: "  USE CURSOR KEYS TO MOVE.             "
-.byte __,__,sc_U,sc_S,sc_E,__,sc_C,sc_U,sc_R,sc_S,sc_O,sc_R,__,sc_K,sc_E,sc_Y,sc_S,__,sc_T,sc_O,__,sc_M,sc_O,sc_V,sc_E,_d,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 19: "  F7  NEXT PAGE                        "
-.byte __,__,sc_F,_7,__,__,sc_N,sc_E,sc_X,sc_T,__,sc_P,sc_A,sc_G,sc_E,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 20: "  F8  PREVIOUS PAGE                    "
-.byte __,__,sc_F,_8,__,__,sc_P,sc_R,sc_E,sc_V,sc_I,sc_O,sc_U,sc_S,__,sc_P,sc_A,sc_G,sc_E,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 21: "  F1  GO TO CONFIG SCREEN              "
-.byte __,__,sc_F,_1,__,__,sc_G,sc_O,__,sc_T,sc_O,__,sc_C,sc_O,sc_N,sc_F,sc_I,sc_G,__,sc_S,sc_C,sc_R,sc_E,sc_E,sc_N,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 22: "  F3  START SCROLLING                  "
-.byte __,__,sc_F,_3,__,__,sc_S,sc_T,sc_A,sc_R,sc_T,__,sc_S,sc_C,sc_R,sc_O,sc_L,sc_L,sc_I,sc_N,sc_G,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 23: "  F5  START SCROLLING                  "
-.byte __,__,sc_F,_5,__,__,sc_S,sc_T,sc_A,sc_R,sc_T,__,sc_S,sc_C,sc_R,sc_O,sc_L,sc_L,sc_I,sc_N,sc_G,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-
-; --- Page 2: Editor Ctrl keys + Scroll controls ---
-; Line 0: "  CTRL+S    SAVE TO DISK               "
-.byte __,__,sc_C,sc_T,sc_R,sc_L,_pl,sc_S,__,__,__,__,sc_S,sc_A,sc_V,sc_E,__,sc_T,sc_O,__,sc_D,sc_I,sc_S,sc_K,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 1: "  CTRL+O    LOAD FROM DISK             "
-.byte __,__,sc_C,sc_T,sc_R,sc_L,_pl,sc_O,__,__,__,__,sc_L,sc_O,sc_A,sc_D,__,sc_F,sc_R,sc_O,sc_M,__,sc_D,sc_I,sc_S,sc_K,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 2: "  CTRL+N    NEW DOCUMENT               "
-.byte __,__,sc_C,sc_T,sc_R,sc_L,_pl,sc_N,__,__,__,__,sc_N,sc_E,sc_W,__,sc_D,sc_O,sc_C,sc_U,sc_M,sc_E,sc_N,sc_T,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 3: "  CTRL+CLR  CLEAR CURRENT PAGE         "
-.byte __,__,sc_C,sc_T,sc_R,sc_L,_pl,sc_C,sc_L,sc_R,__,__,sc_C,sc_L,sc_E,sc_A,sc_R,__,sc_C,sc_U,sc_R,sc_R,sc_E,sc_N,sc_T,__,sc_P,sc_A,sc_G,sc_E,__,__,__,__,__,__,__,__,__,__
-; Line 4: blank
-.byte BLK
-; Line 5: " SCROLL SCREEN:                        "
-.byte __,sc_S,sc_C,sc_R,sc_O,sc_L,sc_L,__,sc_S,sc_C,sc_R,sc_E,sc_E,sc_N,_co,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 6: blank
-.byte BLK
-; Line 7: "  KEYS 1 TO 9, 0  SET SPEED            "
+; Line 9: "  KEYS 1 TO 9, 0  SET SPEED            "
 .byte __,__,sc_K,sc_E,sc_Y,sc_S,__,_1,__,sc_T,sc_O,__,_9,_c,__,_0,__,__,sc_S,sc_E,sc_T,__,sc_S,sc_P,sc_E,sc_E,sc_D,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 8: "  1=SLOWEST  0=FASTEST                 "
+; Line 10: "  1=SLOWEST  0=FASTEST                 "
 .byte __,__,_1,_eq,sc_S,sc_L,sc_O,sc_W,sc_E,sc_S,sc_T,__,__,_0,_eq,sc_F,sc_A,sc_S,sc_T,sc_E,sc_S,sc_T,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 9: "  SHIFT LOCK   REVERSE SCROLL          "
+; Line 11: "  SHIFT LOCK   REVERSE SCROLL          "
 .byte __,__,sc_S,sc_H,sc_I,sc_F,sc_T,__,sc_L,sc_O,sc_C,sc_K,__,__,__,sc_R,sc_E,sc_V,sc_E,sc_R,sc_S,sc_E,__,sc_S,sc_C,sc_R,sc_O,sc_L,sc_L,__,__,__,__,__,__,__,__,__,__,__
-; Line 10: "  F1  GO TO CONFIG SCREEN              "
+; Line 12: "  F1  GO TO CONFIG SCREEN              "
 .byte __,__,sc_F,_1,__,__,sc_G,sc_O,__,sc_T,sc_O,__,sc_C,sc_O,sc_N,sc_F,sc_I,sc_G,__,sc_S,sc_C,sc_R,sc_E,sc_E,sc_N,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 11: "  F3  OPEN EDITOR                      "
+; Line 13: "  F3  OPEN EDITOR                      "
 .byte __,__,sc_F,_3,__,__,sc_O,sc_P,sc_E,sc_N,__,sc_E,sc_D,sc_I,sc_T,sc_O,sc_R,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Lines 12-13: blank
+; Line 14: "  T     START FROM THE TOP             "
+.byte __,__,sc_T,__,__,__,__,__,sc_S,sc_T,sc_A,sc_R,sc_T,__,sc_F,sc_R,sc_O,sc_M,__,sc_T,sc_H,sc_E,__,sc_T,sc_O,sc_P,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 15: "  ,     GO TO PREV #                  "
+.byte __,__,_c,__,__,__,__,__,sc_G,sc_O,__,sc_T,sc_O,__,sc_P,sc_R,sc_E,sc_V,__,$23,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 16: "  .     GO TO NEXT #                  "
+.byte __,__,_d,__,__,__,__,__,sc_G,sc_O,__,sc_T,sc_O,__,sc_N,sc_E,sc_X,sc_T,__,$23,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 17: blank
+.byte BLK
+; Line 18: " # EDITOR SCREEN:                      "
+.byte __,$23,__,sc_E,sc_D,sc_I,sc_T,sc_O,sc_R,__,sc_S,sc_C,sc_R,sc_E,sc_E,sc_N,_co,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 19: blank
+.byte BLK
+; Line 20: "  TYPE TO ENTER TEXT.                   "
+.byte __,__,sc_T,sc_Y,sc_P,sc_E,__,sc_T,sc_O,__,sc_E,sc_N,sc_T,sc_E,sc_R,__,sc_T,sc_E,sc_X,sc_T,_d,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 21: "  USE CURSOR KEYS TO MOVE.             "
+.byte __,__,sc_U,sc_S,sc_E,__,sc_C,sc_U,sc_R,sc_S,sc_O,sc_R,__,sc_K,sc_E,sc_Y,sc_S,__,sc_T,sc_O,__,sc_M,sc_O,sc_V,sc_E,_d,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 22: "  F7  NEXT PAGE                        "
+.byte __,__,sc_F,_7,__,__,sc_N,sc_E,sc_X,sc_T,__,sc_P,sc_A,sc_G,sc_E,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 23: "  F8  PREVIOUS PAGE                    "
+.byte __,__,sc_F,_8,__,__,sc_P,sc_R,sc_E,sc_V,sc_I,sc_O,sc_U,sc_S,__,sc_P,sc_A,sc_G,sc_E,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+
+; --- Page 2: Editor Ctrl keys + Config + new text ---
+; Line 0: "  F1  GO TO CONFIG SCREEN              "
+.byte __,__,sc_F,_1,__,__,sc_G,sc_O,__,sc_T,sc_O,__,sc_C,sc_O,sc_N,sc_F,sc_I,sc_G,__,sc_S,sc_C,sc_R,sc_E,sc_E,sc_N,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 1: "  F3  START PROMPTING FROM CURSOR POS. "
+.byte __,__,sc_F,_3,__,__,sc_S,sc_T,sc_A,sc_R,sc_T,__,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,sc_I,sc_N,sc_G,__,sc_F,sc_R,sc_O,sc_M,__,sc_C,sc_U,sc_R,sc_S,sc_O,sc_R,__,sc_P,sc_O,sc_S,_d,__,__
+; Line 2: "  F5  START PROMPTING FROM LAST POS.   "
+.byte __,__,sc_F,_5,__,__,sc_S,sc_T,sc_A,sc_R,sc_T,__,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,sc_I,sc_N,sc_G,__,sc_F,sc_R,sc_O,sc_M,__,sc_L,sc_A,sc_S,sc_T,__,sc_P,sc_O,sc_S,_d,__,__,__,__
+; Line 3: "  F2  CHANGE BACKGROUND COLOR          "
+.byte __,__,sc_F,_2,__,__,sc_C,sc_H,sc_A,sc_N,sc_G,sc_E,__,sc_B,sc_A,sc_C,sc_K,sc_G,sc_R,sc_O,sc_U,sc_N,sc_D,__,sc_C,sc_O,sc_L,sc_O,sc_R,__,__,__,__,__,__,__,__,__,__,__
+; Line 4: "  F4  CHANGE TEXT COLOR                 "
+.byte __,__,sc_F,_4,__,__,sc_C,sc_H,sc_A,sc_N,sc_G,sc_E,__,sc_T,sc_E,sc_X,sc_T,__,sc_C,sc_O,sc_L,sc_O,sc_R,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 5: "  CTRL+S    SAVE TO DISK               "
+.byte __,__,sc_C,sc_T,sc_R,sc_L,_pl,sc_S,__,__,__,__,sc_S,sc_A,sc_V,sc_E,__,sc_T,sc_O,__,sc_D,sc_I,sc_S,sc_K,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 2: "  CTRL+O    LOAD FROM DISK             "
+.byte __,__,sc_C,sc_T,sc_R,sc_L,_pl,sc_O,__,__,__,__,sc_L,sc_O,sc_A,sc_D,__,sc_F,sc_R,sc_O,sc_M,__,sc_D,sc_I,sc_S,sc_K,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 3: "  CTRL+N    NEW DOCUMENT               "
+.byte __,__,sc_C,sc_T,sc_R,sc_L,_pl,sc_N,__,__,__,__,sc_N,sc_E,sc_W,__,sc_D,sc_O,sc_C,sc_U,sc_M,sc_E,sc_N,sc_T,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 4: "  CTRL+CLR  CLEAR CURRENT PAGE         "
+.byte __,__,sc_C,sc_T,sc_R,sc_L,_pl,sc_C,sc_L,sc_R,__,__,sc_C,sc_L,sc_E,sc_A,sc_R,__,sc_C,sc_U,sc_R,sc_R,sc_E,sc_N,sc_T,__,sc_P,sc_A,sc_G,sc_E,__,__,__,__,__,__,__,__,__,__
+; Line 5: blank
+.byte BLK
+; Line 6: " # CONFIG SCREEN:                      "
+.byte __,$23,__,sc_C,sc_O,sc_N,sc_F,sc_I,sc_G,__,sc_S,sc_C,sc_R,sc_E,sc_E,sc_N,_co,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 7: "  UP/DOWN     ADJUST BASE SPEED        "
+.byte BLK
+; Line 8: "  UP/DOWN     ADJUST BASE SPEED        "
+.byte __,__,sc_U,sc_P,_sl,sc_D,sc_O,sc_W,sc_N,__,__,__,__,__,sc_A,sc_D,sc_J,sc_U,sc_S,sc_T,__,sc_B,sc_A,sc_S,sc_E,__,sc_S,sc_P,sc_E,sc_E,sc_D,__,__,__,__,__,__,__,__,__
+; Line 9: "  LEFT/RIGHT  ADJUST CURVE             "
+.byte __,__,sc_L,sc_E,sc_F,sc_T,_sl,sc_R,sc_I,sc_G,sc_H,sc_T,__,__,sc_A,sc_D,sc_J,sc_U,sc_S,sc_T,__,sc_C,sc_U,sc_R,sc_V,sc_E,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 10: "  RETURN      START                    "
+.byte __,__,sc_R,sc_E,sc_T,sc_U,sc_R,sc_N,__,__,__,__,__,__,sc_S,sc_T,sc_A,sc_R,sc_T,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 11: "  F3          OPEN EDITOR              "
+.byte __,__,sc_F,_3,__,__,__,__,__,__,__,__,__,__,sc_O,sc_P,sc_E,sc_N,__,sc_E,sc_D,sc_I,sc_T,sc_O,sc_R,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 12: "  F5          START SCROLL             "
+.byte __,__,sc_F,_5,__,__,__,__,__,__,__,__,__,__,sc_S,sc_T,sc_A,sc_R,sc_T,__,sc_S,sc_C,sc_R,sc_O,sc_L,sc_L,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 13: blank
+.byte BLK
+; Line 14: " START A NEW DOCUMENT BY               "
+.byte __,sc_S,sc_T,sc_A,sc_R,sc_T,__,sc_A,__,sc_N,sc_E,sc_W,__,sc_D,sc_O,sc_C,sc_U,sc_M,sc_E,sc_N,sc_T,__,sc_B,sc_Y,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 15: " PRESSING CTRL+N FROM THE              "
+.byte __,sc_P,sc_R,sc_E,sc_S,sc_S,sc_I,sc_N,sc_G,__,sc_C,sc_T,sc_R,sc_L,_pl,sc_N,__,sc_F,sc_R,sc_O,sc_M,__,sc_T,sc_H,sc_E,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 16: " EDITOR, WHICH CAN BE                  "
+.byte __,sc_E,sc_D,sc_I,sc_T,sc_O,sc_R,_c,__,sc_W,sc_H,sc_I,sc_C,sc_H,__,sc_C,sc_A,sc_N,__,sc_B,sc_E,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 17: " ACCESSED BY PRESSING F3.              "
+.byte __,sc_A,sc_C,sc_C,sc_E,sc_S,sc_S,sc_E,sc_D,__,sc_B,sc_Y,__,sc_P,sc_R,sc_E,sc_S,sc_S,sc_I,sc_N,sc_G,__,sc_F,_3,_d,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 18: " FROM THERE YOU CAN ALSO               "
+.byte __,sc_F,sc_R,sc_O,sc_M,__,sc_T,sc_H,sc_E,sc_R,sc_E,__,sc_Y,sc_O,sc_U,__,sc_C,sc_A,sc_N,__,sc_A,sc_L,sc_S,sc_O,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 19: " TYPE # SYMBOLS, WHICH SERVE           "
+.byte __,sc_T,sc_Y,sc_P,sc_E,__,$23,__,sc_S,sc_Y,sc_M,sc_B,sc_O,sc_L,sc_S,_c,__,sc_W,sc_H,sc_I,sc_C,sc_H,__,sc_S,sc_E,sc_R,sc_V,sc_E,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 20: " AS MARKERS THAT YOU CAN               "
+.byte __,sc_A,sc_S,__,sc_M,sc_A,sc_R,sc_K,sc_E,sc_R,sc_S,__,sc_T,sc_H,sc_A,sc_T,__,sc_Y,sc_O,sc_U,__,sc_C,sc_A,sc_N,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 21: " JUMP TO WHILE SCROLLING,              "
+.byte __,sc_J,sc_U,sc_M,sc_P,__,sc_T,sc_O,__,sc_W,sc_H,sc_I,sc_L,sc_E,__,sc_S,sc_C,sc_R,sc_O,sc_L,sc_L,sc_I,sc_N,sc_G,_c,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 22: " BY PRESSING THE COMMA AND             "
+.byte __,sc_B,sc_Y,__,sc_P,sc_R,sc_E,sc_S,sc_S,sc_I,sc_N,sc_G,__,sc_T,sc_H,sc_E,__,sc_C,sc_O,sc_M,sc_M,sc_A,__,sc_A,sc_N,sc_D,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 23: " PERIOD KEYS.                          "
+.byte __,sc_P,sc_E,sc_R,sc_I,sc_O,sc_D,__,sc_K,sc_E,sc_Y,sc_S,_d,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+
+; --- Page 3: Back to the Future quote ---
+; Line 0: blank
+.byte BLK
+; Line 1: " TO THOSE ASKING: "ARE YOU             "
+.byte __,sc_T,sc_O,__,sc_T,sc_H,sc_O,sc_S,sc_E,__,sc_A,sc_S,sc_K,sc_I,sc_N,sc_G,_co,__,$22,sc_A,sc_R,sc_E,__,sc_Y,sc_O,sc_U,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 2: " TELLING ME YOU BUILT A                "
+.byte __,sc_T,sc_E,sc_L,sc_L,sc_I,sc_N,sc_G,__,sc_M,sc_E,__,sc_Y,sc_O,sc_U,__,sc_B,sc_U,sc_I,sc_L,sc_T,__,sc_A,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 3: " TELEPROMPTER... OUT OF A              "
+.byte __,sc_T,sc_E,sc_L,sc_E,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,sc_E,sc_R,__,_d,_d,__,sc_O,sc_U,sc_T,__,sc_O,sc_F,__,sc_A,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 4: " COMMODORE 64?" ALL I HAVE             "
+.byte __,sc_C,sc_O,sc_M,sc_M,sc_O,sc_D,sc_O,sc_R,sc_E,__,_6,_4,$3F,$22,__,sc_A,sc_L,sc_L,__,sc_I,__,sc_H,sc_A,sc_V,sc_E,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 5: " TO SAY IS: "IF YOU'RE GONNA           "
+.byte __,sc_T,sc_O,__,sc_S,sc_A,sc_Y,__,sc_I,sc_S,_co,__,$22,sc_I,sc_F,__,sc_Y,sc_O,sc_U,$27,sc_R,sc_E,__,sc_G,sc_O,sc_N,sc_N,sc_A,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 6: " BUILD A TELEPROMPTER FOR              "
+.byte __,sc_B,sc_U,sc_I,sc_L,sc_D,__,sc_A,__,sc_T,sc_E,sc_L,sc_E,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,sc_E,sc_R,__,sc_F,sc_O,sc_R,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 7: " TIME TRAVEL, WHY NOT DO IT            "
+.byte __,sc_T,sc_I,sc_M,sc_E,__,sc_T,sc_R,sc_A,sc_V,sc_E,sc_L,_c,__,sc_W,sc_H,sc_Y,__,sc_N,sc_O,sc_T,__,sc_D,sc_O,__,sc_I,sc_T,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Line 8: " WITH SOME STYLE?"                     "
+.byte __,sc_W,sc_I,sc_T,sc_H,__,sc_S,sc_O,sc_M,sc_E,__,sc_S,sc_T,sc_Y,sc_L,sc_E,$3F,$22,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
+; Lines 9-23: blank
 .byte BLK
 .byte BLK
-; Line 14: "  EDIT THIS DOCUMENT TO ADD            "
-.byte __,__,sc_E,sc_D,sc_I,sc_T,__,sc_T,sc_H,sc_I,sc_S,__,sc_D,sc_O,sc_C,sc_U,sc_M,sc_E,sc_N,sc_T,__,sc_T,sc_O,__,sc_A,sc_D,sc_D,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 15: "  YOUR OWN TELEPROMPTER                "
-.byte __,__,sc_Y,sc_O,sc_U,sc_R,__,sc_O,sc_W,sc_N,__,sc_T,sc_E,sc_L,sc_E,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,sc_E,sc_R,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 16: "  SCRIPT, THEN PRESS F3 OR             "
-.byte __,__,sc_S,sc_C,sc_R,sc_I,sc_P,sc_T,_c,__,sc_T,sc_H,sc_E,sc_N,__,sc_P,sc_R,sc_E,sc_S,sc_S,__,sc_F,_3,__,sc_O,sc_R,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 17: "  F5 TO START SCROLLING.               "
-.byte __,__,sc_F,_5,__,sc_T,sc_O,__,sc_S,sc_T,sc_A,sc_R,sc_T,__,sc_S,sc_C,sc_R,sc_O,sc_L,sc_L,sc_I,sc_N,sc_G,_d,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Lines 18-23: blank
+.byte BLK
+.byte BLK
+.byte BLK
+.byte BLK
 .byte BLK
 .byte BLK
 .byte BLK
