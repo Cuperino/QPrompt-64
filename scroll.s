@@ -849,39 +849,63 @@ config_screen:
         ldx #0
 @in1:   lda @str_instr1, x
         beq @in1d
-        sta SCREEN + 8*40 + 2, x
+        sta SCREEN + 8*40 + 3, x
         inx
         bne @in1
 @in1d:
         ldx #0
 @in2:   lda @str_instr2, x
         beq @in2d
-        sta SCREEN + 9*40 + 2, x
+        sta SCREEN + 9*40 + 3, x
         inx
         bne @in2
 @in2d:
         ldx #0
-@in3:   lda @str_instr3, x
+@in3:   lda @str_instr4, x
         beq @in3d
-        sta SCREEN + 10*40 + 2, x
+        sta SCREEN + 11*40 + 3, x
         inx
         bne @in3
 @in3d:
         ldx #0
-@in4:   lda @str_instr4, x
+@in4:   lda @str_instr3, x
         beq @in4d
-        sta SCREEN + 11*40 + 2, x
+        sta SCREEN + 12*40 + 3, x
         inx
         bne @in4
 @in4d:
-        ; Row 23: "QPROMPT 64" centered (col 15)
+        ; Row 14: velocity info
         ldx #0
-@in5:   lda @str_title, x
+@in5:   lda @str_velocity, x
         beq @in5d
-        sta SCREEN + 23*40 + 15, x
+        sta SCREEN + 14*40 + 2, x
         inx
         bne @in5
 @in5d:
+        ; Row 21: "QPROMPT 64" centered (col 15)
+        ldx #0
+@in6:   lda @str_title, x
+        beq @in6d
+        sta SCREEN + 20*40 + 14, x
+        inx
+        bne @in6
+@in6d:
+        ; Row 22: copyright
+        ldx #0
+@in7:   lda @str_copyright, x
+        beq @in7d
+        sta SCREEN + 22*40 + 1, x
+        inx
+        bne @in7
+@in7d:
+        ; Row 23: license
+        ldx #0
+@in8:   lda @str_license, x
+        beq @in8d
+        sta SCREEN + 23*40 + 4, x
+        inx
+        bne @in8
+@in8d:
         ; Set all color RAM to white
         lda #WHITE
         ldx #0
@@ -940,11 +964,17 @@ config_screen:
 @str_instr2:
         .byte sc_L,sc_E,sc_F,sc_T,$2F,sc_R,sc_I,sc_G,sc_H,sc_T,__,$3D,__,sc_C,sc_U,sc_R,sc_V,sc_A,sc_T,sc_U,sc_R,sc_E,0
 @str_instr3:
-        .byte sc_R,sc_E,sc_T,sc_U,sc_R,sc_N,$2F,sc_F,$35,__,$3D,__,sc_S,sc_T,sc_A,sc_R,sc_T,0
+        .byte sc_F,_5,__,$3D,__,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,sc_E,sc_R,0
 @str_instr4:
-        .byte sc_F,$33,__,$3D,__,sc_E,sc_D,sc_I,sc_T,sc_O,sc_R,0
+        .byte sc_F,_3,__,$3D,__,sc_E,sc_D,sc_I,sc_T,sc_O,sc_R,0
+@str_velocity:
+        .byte sc_N,sc_U,sc_M,sc_B,sc_E,sc_R,sc_S,__,sc_A,sc_N,sc_D,__,sc_S,sc_H,sc_I,sc_F,sc_T,__,sc_C,sc_O,sc_N,sc_T,sc_R,sc_O,sc_L,__,sc_V,sc_E,sc_L,sc_O,sc_C,sc_I,sc_T,sc_Y,0
 @str_title:
-        .byte sc_Q,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,__,$36,$34,0
+        .byte sc_Q,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,__,_6,_4,0
+@str_copyright:
+        .byte sc_C,sc_O,sc_P,sc_Y,sc_R,sc_I,sc_G,sc_H,sc_T,__,_2,_0,_2,_6,__,sc_J,sc_A,sc_V,sc_I,sc_E,sc_R,__,sc_O,_d,__,sc_C,sc_O,sc_R,sc_D,sc_E,sc_R,sc_O,__,sc_P,sc_E,sc_R,sc_E,sc_Z,0
+@str_license:
+        .byte sc_L,sc_I,sc_C,sc_E,sc_N,sc_S,sc_E,sc_D,__,sc_U,sc_N,sc_D,sc_E,sc_R,__,sc_C,sc_R,sc_E,sc_A,sc_T,sc_I,sc_V,sc_E,__,sc_C,sc_O,sc_M,sc_M,sc_O,sc_N,sc_S,__,_0,0
 
 
 ; ---- Display float as "N.NN" -----------------------------------------------
