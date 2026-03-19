@@ -590,12 +590,12 @@ PETSCII_F5      = $87
 config_screen_init:
         ; Initialize config floats from ROM defaults
         ldx #4
-@cp_bs: lda fp_0_20, x
+@cp_bs: lda fp_0_15, x
         sta cfg_base_speed, x
         dex
         bpl @cp_bs
         ldx #4
-@cp_ac: lda fp_1_60, x
+@cp_ac: lda fp_1_20, x
         sta cfg_accel_curv, x
         dex
         bpl @cp_ac
@@ -4521,8 +4521,8 @@ _9 = $39
 fp_256:         .byte $89,$00,$00,$00,$00       ; 256.0 (for 8.8 conversion)
 fp_0_01:        .byte $7A,$23,$D7,$0A,$3D       ; 0.01 (baseSpeed step)
 fp_0_05:        .byte $7C,$4C,$CC,$CC,$CD       ; 0.05 (curvature step)
-fp_1_60:        .byte $81,$4C,$CC,$CC,$CD       ; 1.60 (initial curvature)
-fp_0_20:        .byte $7E,$4C,$CC,$CC,$CD       ; 0.20 (initial baseSpeed)
+fp_1_20:        .byte $81,$19,$99,$99,$9A       ; 1.20 (initial curvature)
+fp_0_15:        .byte $7E,$19,$99,$99,$9A       ; 0.15 (initial baseSpeed)
 fp_0_50:        .byte $80,$00,$00,$00,$00       ; 0.50 (min curvature / rounding)
 fp_2_0:         .byte $82,$00,$00,$00,$00       ; 2.0 (max curvature)
 fp_4_0:         .byte $83,$00,$00,$00,$00       ; 4.0 (max baseSpeed)
