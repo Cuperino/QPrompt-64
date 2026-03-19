@@ -685,7 +685,7 @@ config_screen:
         lda $66
         bmi @clamp_speed_hi         ; negative → over max → clamp
 @speed_inc_ok:
-        jsr @draw_config
+        jsr @update_speed
         jmp @cfg_loop
 @clamp_speed_hi:
         ldx #4
@@ -693,7 +693,7 @@ config_screen:
         sta cfg_base_speed, x
         dex
         bpl @csh
-        jsr @draw_config
+        jsr @update_speed
         jmp @cfg_loop
 
 @dec_speed:
@@ -722,7 +722,7 @@ config_screen:
         dex
         bpl @csl
 @speed_dec_ok:
-        jsr @draw_config
+        jsr @update_speed
         jmp @cfg_loop
 
 @inc_curv:
@@ -745,7 +745,7 @@ config_screen:
         lda $66
         bmi @clamp_curv_hi          ; negative → over max → clamp
 @curv_inc_ok:
-        jsr @draw_config
+        jsr @update_curv
         jmp @cfg_loop
 @clamp_curv_hi:
         ldx #4
@@ -753,7 +753,7 @@ config_screen:
         sta cfg_accel_curv, x
         dex
         bpl @cch
-        jsr @draw_config
+        jsr @update_curv
         jmp @cfg_loop
 
 @dec_curv:
@@ -782,8 +782,26 @@ config_screen:
         dex
         bpl @ccl
 @curv_dec_ok:
-        jsr @draw_config
+        jsr @update_curv
         jmp @cfg_loop
+
+; --- Update just the base speed value on screen ---
+@update_speed:
+        lda #<(SCREEN + 2*40 + 20)
+        ldx #<cfg_base_speed
+        ldy #>cfg_base_speed
+        bne @update_val             ; always taken
+; --- Update just the curvature value on screen ---
+@update_curv:
+        lda #<(SCREEN + 4*40 + 20)
+        ldx #<cfg_accel_curv
+        ldy #>cfg_accel_curv
+@update_val:
+        sta zp_dst
+        lda #>(SCREEN + 2*40 + 20)  ; high byte same for rows 2 and 4
+        sta zp_dst+1
+        txa
+        jmp display_fixed2
 
 ; --- Draw config screen ---
 @draw_config:
@@ -833,67 +851,32 @@ config_screen:
         ldy #>cfg_accel_curv
         jsr display_fixed2
 
-        ; Row 8: instructions
+        ; Draw all config strings via table
         ldx #0
-@in1:   lda @str_instr1, x
-        beq @in1d
-        sta SCREEN + 8*40 + 3, x
-        inx
-        bne @in1
-@in1d:
+@draw_strs:
+        lda @str_tbl_lo, x
+        sta @ds_lda+1
+        lda @str_tbl_hi, x
+        sta @ds_lda+2
+        lda @scr_tbl_lo, x
+        sta @ds_sta+1
+        lda @scr_tbl_hi, x
+        sta @ds_sta+2
+        stx @ds_savx+1
+        ldy #0
+@ds_lda:
+        lda $FFFF, y
+        beq @ds_next
+@ds_sta:
+        sta $FFFF, y
+        iny
+        bne @ds_lda
+@ds_next:
+@ds_savx:
         ldx #0
-@in2:   lda @str_instr2, x
-        beq @in2d
-        sta SCREEN + 9*40 + 3, x
         inx
-        bne @in2
-@in2d:
-        ldx #0
-@in3:   lda @str_instr4, x
-        beq @in3d
-        sta SCREEN + 11*40 + 3, x
-        inx
-        bne @in3
-@in3d:
-        ldx #0
-@in4:   lda @str_instr3, x
-        beq @in4d
-        sta SCREEN + 12*40 + 3, x
-        inx
-        bne @in4
-@in4d:
-        ; Row 14: velocity info
-        ldx #0
-@in5:   lda @str_velocity, x
-        beq @in5d
-        sta SCREEN + 14*40 + 2, x
-        inx
-        bne @in5
-@in5d:
-        ; Row 21: "QPROMPT 64" centered (col 15)
-        ldx #0
-@in6:   lda @str_title, x
-        beq @in6d
-        sta SCREEN + 20*40 + 14, x
-        inx
-        bne @in6
-@in6d:
-        ; Row 22: copyright
-        ldx #0
-@in7:   lda @str_copyright, x
-        beq @in7d
-        sta SCREEN + 22*40 + 1, x
-        inx
-        bne @in7
-@in7d:
-        ; Row 23: license
-        ldx #0
-@in8:   lda @str_license, x
-        beq @in8d
-        sta SCREEN + 23*40 + 4, x
-        inx
-        bne @in8
-@in8d:
+        cpx #8
+        bne @draw_strs
         ; Set all color RAM to white
         lda #WHITE
         ldx #0
@@ -963,6 +946,20 @@ config_screen:
         .byte sc_C,sc_O,sc_P,sc_Y,sc_R,sc_I,sc_G,sc_H,sc_T,__,_2,_0,_2,_6,__,sc_J,sc_A,sc_V,sc_I,sc_E,sc_R,__,sc_O,_d,__,sc_C,sc_O,sc_R,sc_D,sc_E,sc_R,sc_O,__,sc_P,sc_E,sc_R,sc_E,sc_Z,0
 @str_license:
         .byte sc_L,sc_I,sc_C,sc_E,sc_N,sc_S,sc_E,sc_D,__,sc_U,sc_N,sc_D,sc_E,sc_R,__,sc_C,sc_R,sc_E,sc_A,sc_T,sc_I,sc_V,sc_E,__,sc_C,sc_O,sc_M,sc_M,sc_O,sc_N,sc_S,__,_0,0
+
+; String/screen address tables for table-driven config renderer
+@str_tbl_lo:
+        .byte <@str_instr1, <@str_instr2, <@str_instr4, <@str_instr3
+        .byte <@str_velocity, <@str_title, <@str_copyright, <@str_license
+@str_tbl_hi:
+        .byte >@str_instr1, >@str_instr2, >@str_instr4, >@str_instr3
+        .byte >@str_velocity, >@str_title, >@str_copyright, >@str_license
+@scr_tbl_lo:
+        .byte <(SCREEN+8*40+3), <(SCREEN+9*40+3), <(SCREEN+11*40+3), <(SCREEN+12*40+3)
+        .byte <(SCREEN+14*40+2), <(SCREEN+20*40+14), <(SCREEN+22*40+1), <(SCREEN+23*40+4)
+@scr_tbl_hi:
+        .byte >(SCREEN+8*40+3), >(SCREEN+9*40+3), >(SCREEN+11*40+3), >(SCREEN+12*40+3)
+        .byte >(SCREEN+14*40+2), >(SCREEN+20*40+14), >(SCREEN+22*40+1), >(SCREEN+23*40+4)
 
 
 ; ---- Display float as "N.NN" -----------------------------------------------
