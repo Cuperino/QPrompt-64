@@ -1892,10 +1892,10 @@ editor_loop:
         bne @not_f1_ed
         jmp ed_exit
 @not_f1_ed:
-        cmp #$86                    ; F3 → exit to scroll (jump to cursor)
-        bne @not_f3_ed
+        cmp #$8B                    ; F6 (Shift+F5) → exit to scroll (jump to cursor)
+        bne @not_f6_ed
         jmp ed_exit_to_scroll_f3
-@not_f3_ed:
+@not_f6_ed:
         cmp #$0D                    ; RETURN
         bne @not_return
         jmp ed_return_key
@@ -2429,13 +2429,13 @@ ed_exit_to_scroll:
         lda #1                      ; return 1 = go to scroll (F5 resume)
         rts
 
-; ---- F3: Exit to scroll (jump to cursor) -----------------------------------
+; ---- F6: Exit to scroll (jump to cursor) -----------------------------------
 ed_exit_to_scroll_f3:
         jsr undraw_cursor
         jsr save_editor_page
         lda #1
         sta came_from               ; came from editor
-        lda #2                      ; return 2 = go to scroll (F3 jump to cursor)
+        lda #2                      ; return 2 = go to scroll (F6 jump to cursor)
         rts
 
 ; ---- Calculate cursor screen address ----------------------------------------
@@ -2729,7 +2729,7 @@ draw_status_bar:
 @dsb_hint_str:
         ; ↑N  ↑O  ↑S    F1  F3  F5  F7  F8
         .byte $1E,sc_N,__,$1E,sc_O,__,$1E,sc_S,__,__,__
-        .byte sc_F,$31,__,sc_F,$33,__,sc_F,$35,__,sc_F,$37,__,sc_F,$38,0
+        .byte sc_F,$31,__,sc_F,$35,__,sc_F,$36,__,sc_F,$37,__,sc_F,$38,0
 
 ; ---- Dialog system ----------------------------------------------------------
 ; Shows a message on row 24, waits for RETURN (confirm) or ← (cancel).
@@ -4617,10 +4617,10 @@ text_data:
 ; --- Page 2: Editor Ctrl keys + Config + new text ---
 ; Line 0: "  F1  GO TO CONFIG SCREEN              "
 .byte __,__,sc_F,_1,__,__,sc_G,sc_O,__,sc_T,sc_O,__,sc_C,sc_O,sc_N,sc_F,sc_I,sc_G,__,sc_S,sc_C,sc_R,sc_E,sc_E,sc_N,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
-; Line 1: "  F3  START PROMPTING FROM CURSOR POS. "
-.byte __,__,sc_F,_3,__,__,sc_S,sc_T,sc_A,sc_R,sc_T,__,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,sc_I,sc_N,sc_G,__,sc_F,sc_R,sc_O,sc_M,__,sc_C,sc_U,sc_R,sc_S,sc_O,sc_R,__,sc_P,sc_O,sc_S,_d,__,__
 ; Line 2: "  F5  START PROMPTING FROM LAST POS.   "
 .byte __,__,sc_F,_5,__,__,sc_S,sc_T,sc_A,sc_R,sc_T,__,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,sc_I,sc_N,sc_G,__,sc_F,sc_R,sc_O,sc_M,__,sc_L,sc_A,sc_S,sc_T,__,sc_P,sc_O,sc_S,_d,__,__,__,__
+; Line 1: "  F6  START PROMPTING FROM CURSOR POS. "
+.byte __,__,sc_F,_6,__,__,sc_S,sc_T,sc_A,sc_R,sc_T,__,sc_P,sc_R,sc_O,sc_M,sc_P,sc_T,sc_I,sc_N,sc_G,__,sc_F,sc_R,sc_O,sc_M,__,sc_C,sc_U,sc_R,sc_S,sc_O,sc_R,__,sc_P,sc_O,sc_S,_d,__,__
 ; Line 3: "  CTRL+S    SAVE TO DISK               "
 .byte __,__,sc_C,sc_T,sc_R,sc_L,_pl,sc_S,__,__,__,__,sc_S,sc_A,sc_V,sc_E,__,sc_T,sc_O,__,sc_D,sc_I,sc_S,sc_K,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__
 ; Line 2: "  CTRL+O    LOAD FROM DISK             "
