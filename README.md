@@ -2,8 +2,8 @@
 QPrompt 64 is a reinterpretation of the QPrompt Teleprompter App, adapted to work on the Commodore 64. It was made as part of an April Fools joke. However, the software is real and fully functional.
 
 ## Releases
-- [v1.0 - Stable](http://c64.qprompt.app/1.0) of QPrompt 64 runs on both NTSC and PAL Commodore 64's
-- [v1.1b - Color](http://c64.qprompt.app/1.1b) introduces color text but runs only on PAL stock Commodore 64's. It can work on NTSC by overclocking.
+- [v1.0 - Stable](http://c64.qprompt.app/1.0) ([Download](https://c64.qprompt.app/1.0/qprompt64-stable.prg)) Runs on both NTSC and PAL Commodore 64's
+- [v1.1b - Color](http://c64.qprompt.app/1.1b) ([Download](https://c64.qprompt.app/1.1b/qprompt64-color.prg)) Introduces color text but runs only on PAL stock Commodore 64's. It can work on NTSC by overclocking.
 
 This software was tested to work on the Commodore 64 Ultimate and the VICE emulator.
 
