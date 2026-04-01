@@ -11,7 +11,7 @@ This software was tested to work on the Commodore 64 Ultimate and the VICE emula
 Contributions are welcome. One way you could contribute is by improving the large font used in prompter screen. New features are also welcome.
 
 ## Disclosure of AI Use
-Claude Code with Opus 4.6 was used to write most of this software. The author is slow at writing assembly and this was the only way to develop this software in a reasonable amount of time.
+Claude Code with Opus 4.6 was used to write most of this software. The author is slow at writing assembly and this was the only way for him to develop this software in a reasonable amount of time for the April Fools.
 
 ## April Fools
 QPrompt 64 was made as part of an April Fools joke, in which QPrompt's author discovered the app by establishing an HTTP connection over a quantum tunnel to a parallel dimension and, possibly, a different time period.
