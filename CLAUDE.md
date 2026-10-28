@@ -13,6 +13,14 @@ make clean    # remove scroll.o and scroll.prg
 
 Output is a standard C64 `.prg` file loadable in VICE or on real hardware.
 
+## Testing
+
+```bash
+tests/vice/run_all.sh [baseline-ref]   # ~20 s: keyboard unit test, beam race NTSC+PAL, screen content vs baseline
+```
+
+Drives VICE (flatpak `net.sf.VICE`) through its remote monitor; see `tests/vice/README.md`. Run it after any change to the scroll, IRQ or render code, NTSC first.
+
 ## Architecture
 
 Single-file 6502 assembly project (`scroll.s`) — a C64 teleprompter with smooth vertical scrolling, velocity control, and a left-border-open sprite effect.
