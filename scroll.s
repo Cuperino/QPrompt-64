@@ -3708,7 +3708,7 @@ render_compute_line:
         lda rnd_wk_char, x
         and #$3F
         tay
-        lda tile_char_idx, y    ; set_idx (0-43)
+        lda tile_char_idx, y    ; set_idx (0-63)
         ; look up tile set pointer via table
         tay
         lda tile_off_lo, y
@@ -5195,23 +5195,24 @@ text_data_end:
 
 ; =============================================================================
 ;  Render engine RODATA
-;  tile_char_idx[128] — maps C64 screen codes $00-$7F to tile set index (0-50)
-;  Screen codes: @=$00, A-Z=$01-$1A, \=$1C, space=$20, 0-9=$30-$39
-;  Punctuation: !=$21 "=$22 #=$23 $=$24 %=$25 '=$27 ,=$2C -=$2D .=$2E /=$2F :=$3A ?=$3F
+;  tile_char_idx[128] — maps C64 screen codes $00-$7F to tile set index (0-63)
+;  Screen codes: @=$00, A-Z=$01-$1A, [=$1B \=$1C ]=$1D up=$1E left=$1F, space=$20, 0-9=$30-$39
+;  Punctuation: !=$21 "=$22 #=$23 $=$24 %=$25 &=$26 '=$27 (=$28 )=$29 *=$2A +=$2B ,=$2C -=$2D .=$2E /=$2F
+;               :=$3A ;=$3B <=$3C ==$3D >=$3E ?=$3F
 ; =============================================================================
 tile_char_idx:
 ;       $x0 $x1 $x2 $x3 $x4 $x5 $x6 $x7 $x8 $x9 $xA $xB $xC $xD $xE $xF
 .byte    48,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15  ; $00-$0F (@,A-O)
-.byte    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,  0, 50,  0,  0,  0  ; $10-$1F (P-Z,\)
-.byte     0, 39, 45, 44, 46, 47,  0, 43,  0,  0,  0,  0, 37, 41, 38, 49  ; $20-$2F (sp,!,",#,$,%,',-,.,/)
-.byte    27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 42,  0,  0,  0,  0, 40  ; $30-$3F (0-9,:=3A,?=3F)
+.byte    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 60, 50, 61, 62, 63  ; $10-$1F (P-Z,[,\,],up-arrow,left-arrow)
+.byte     0, 39, 45, 44, 46, 47, 53, 43, 54, 55, 56, 51, 37, 41, 38, 49  ; $20-$2F (sp,!,",#,$,%,&,',(,),*,+,comma,-,.,/)
+.byte    27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 42, 57, 58, 52, 59, 40  ; $30-$3F (0-9,:,;,<,=,>,?)
 .byte     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0  ; $40-$4F
 .byte     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0  ; $50-$5F
 .byte     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0  ; $60-$6F
 .byte     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0  ; $70-$7F
 
 ; =============================================================================
-;  tile_sets[51][9] — 9 tile indices (top-l,top-c,top-r,mid-l,mid-c,mid-r,
+;  tile_sets[64][9] — 9 tile indices (top-l,top-c,top-r,mid-l,mid-c,mid-r,
 ;                                      bot-l,bot-c,bot-r) per character
 ;  Tile index vocabulary:
 ;   0=blank  1=top-left  2=top-ctr  3=top-right
@@ -5237,8 +5238,8 @@ tile_sets:
 .byte  1,27, 0,  4, 0,18,  6,29, 8
 ; Set 8  H: two straight verts + midbar
 .byte 15, 0,16,   9,28,10,  43, 0,79
-; Set 9  I: centered with T/invT junctions
-.byte  0,19, 0,  0,12, 0,  0,20, 0
+; Set 9  I: centred stem + symmetric top/bot bars
+.byte 188,189,190,   0,12, 0,  191,95,192
 ; Set 10 J: top right + right vert + bot frame
 .byte  0,27, 3,  0, 0, 5,  6,29, 8
 ; Set 11 K: straight stem + upper arm meeting stem at mid + lower leg
@@ -5315,12 +5316,38 @@ tile_sets:
 .byte  1,19,32, 17,37,18, 34,20, 8
 ; Set 47 %: rounded dots at TL/BR + continuous slash
 .byte 90,59,60,  61,62,63,  64,65,91
-; Set 48 @: frame with inner loop, open bottom-right
-.byte  1,27, 3,  4,28,18,  6,29, 0
+; Set 48 @: outer ring open at lower right + inner bowl joined by curl
+.byte  1,27, 3,  183,184,185,   6,186,187
 ; Set 49 /: continuous forward-slash diagonal (TR to BL)
 .byte  0,59,60,  61,62,63,  64,65, 0
 ; Set 50 \: continuous backslash diagonal (TL to BR)
 .byte 86,87, 0,  51,49,47,   0,88,89
+; Set 51 +: centred bar + stem (3px strokes)
+.byte  0,122, 0,  123,37,124,   0,125, 0
+; Set 52 =: two 3-row bars
+.byte 126,127,128,  129,130,131,   0, 0, 0
+; Set 53 &: loop top + crossing leg
+.byte 132,133, 0,  134,135,136,  137,138,139
+; Set 54 (: curved left paren
+.byte  0,140,141,   0,142, 0,   0,143,144
+; Set 55 ): mirror of (
+.byte 145,146, 0,   0,147, 0,  148,149, 0
+; Set 56 *: stem + two crossing diagonals
+.byte 126,150,151,  152,153,154,   0,155, 0
+; Set 57 ;: colon top dot + comma
+.byte  0,13, 0,   0, 0, 0,   0,112, 0
+; Set 58 <: left-pointing chevron
+.byte  0,156,157,  158,159, 0,   0,160,161
+; Set 59 >: mirror of <
+.byte 162,163, 0,   0,164,165,  166,167, 0
+; Set 60 [: vert + top/bot bars
+.byte  0,168, 0,   0,169, 0,   0,170, 0
+; Set 61 ]: mirror of [
+.byte  0,171, 0,   0,172, 0,   0,173, 0
+; Set 62 up arrow (C64 $1E): stem + chevron head
+.byte 59,174,47,  175,176,177,   0,78, 0
+; Set 63 left arrow (C64 $1F): shaft + chevron head
+.byte 59,178, 0,  179,180,181,  88,182, 0
 
 ; Precomputed pointers into tile_sets (lo and hi bytes)
 tile_off_lo:
@@ -5337,6 +5364,10 @@ tile_off_lo:
 .byte <(tile_sets + 40*9), <(tile_sets + 41*9), <(tile_sets + 42*9), <(tile_sets + 43*9)
 .byte <(tile_sets + 44*9), <(tile_sets + 45*9), <(tile_sets + 46*9), <(tile_sets + 47*9)
 .byte <(tile_sets + 48*9), <(tile_sets + 49*9), <(tile_sets + 50*9)
+.byte <(tile_sets + 51*9), <(tile_sets + 52*9)
+.byte <(tile_sets + 53*9), <(tile_sets + 54*9), <(tile_sets + 55*9), <(tile_sets + 56*9)
+.byte <(tile_sets + 57*9), <(tile_sets + 58*9), <(tile_sets + 59*9), <(tile_sets + 60*9)
+.byte <(tile_sets + 61*9), <(tile_sets + 62*9), <(tile_sets + 63*9)
 
 tile_off_hi:
 .byte >(tile_sets +  0*9), >(tile_sets +  1*9), >(tile_sets +  2*9), >(tile_sets +  3*9)
@@ -5352,6 +5383,10 @@ tile_off_hi:
 .byte >(tile_sets + 40*9), >(tile_sets + 41*9), >(tile_sets + 42*9), >(tile_sets + 43*9)
 .byte >(tile_sets + 44*9), >(tile_sets + 45*9), >(tile_sets + 46*9), >(tile_sets + 47*9)
 .byte >(tile_sets + 48*9), >(tile_sets + 49*9), >(tile_sets + 50*9)
+.byte >(tile_sets + 51*9), >(tile_sets + 52*9)
+.byte >(tile_sets + 53*9), >(tile_sets + 54*9), >(tile_sets + 55*9), >(tile_sets + 56*9)
+.byte >(tile_sets + 57*9), >(tile_sets + 58*9), >(tile_sets + 59*9), >(tile_sets + 60*9)
+.byte >(tile_sets + 61*9), >(tile_sets + 62*9), >(tile_sets + 63*9)
 
 ; =============================================================================
 ;  Sprite data at $3700 — dedicated SPRITES segment
@@ -5429,6 +5464,10 @@ spr_left_tri:   ; at $3040
 ;  46-79 N, V, /, X, Y, H strokes (see per-tile comments)
 ;  80-112 Z, \, %, 1, 2, 5, 7, ?, !, comma strokes
 ;  113-121 hash strokes
+;  122-131 plus, equals strokes
+;  132-182 & ( ) * < > [ ] up-arrow left-arrow strokes
+;  183-187 at-sign strokes
+;  188-192 letter I strokes
 ;
 ;  Padding: 3px top / 2px bottom, 1px margin left/right of each glyph.
 ;  Horizontal values: $70=01110000 (left 3px, 1px L-margin)
@@ -5832,8 +5871,221 @@ spr_left_tri:   ; at $3040
 ; T121 — hash bot-r
 .byte $FE,$C0,$C0,$C0,$C0,$C0,$00,$00
 
-; T122-T223 zero-filled (T224-T255 reserved for sprite data at $3F00)
-.res (224-122)*8, 0
+; T122 — plus top-c
+.byte $00,$00,$00,$00,$38,$38,$38,$38
+
+; T123 — plus mid-l
+.byte $00,$00,$0F,$0F,$0F,$00,$00,$00
+
+; T124 — plus mid-r
+.byte $00,$00,$E0,$E0,$E0,$00,$00,$00
+
+; T125 — plus bot-c
+.byte $38,$38,$38,$00,$00,$00,$00,$00
+
+; T126 — equals top-l
+.byte $00,$00,$00,$00,$00,$00,$00,$0F
+
+; T127 — equals top-c
+.byte $00,$00,$00,$00,$00,$00,$00,$FF
+
+; T128 — equals top-r
+.byte $00,$00,$00,$00,$00,$00,$00,$F0
+
+; T129 — equals mid-l
+.byte $0F,$0F,$00,$00,$00,$0F,$0F,$0F
+
+; T130 — equals mid-c
+.byte $FF,$FF,$00,$00,$00,$FF,$FF,$FF
+
+; T131 — equals mid-r
+.byte $F0,$F0,$00,$00,$00,$F0,$F0,$F0
+
+; T132 — amp top-l
+.byte $00,$00,$00,$03,$0F,$1E,$1C,$1C
+
+; T133 — amp top-c
+.byte $00,$00,$00,$F8,$FE,$0F,$07,$07
+
+; T134 — amp mid-l
+.byte $1E,$0F,$07,$0F,$3C,$78,$70,$70
+
+; T135 — amp mid-c
+.byte $0F,$1E,$F0,$C0,$F0,$78,$3C,$1E
+
+; T136 — amp mid-r
+.byte $00,$00,$00,$1C,$1C,$3C,$78,$F0
+
+; T137 — amp bot-l
+.byte $70,$70,$78,$3C,$1F,$07,$00,$00
+
+; T138 — amp bot-c
+.byte $0F,$07,$0F,$3C,$F8,$E0,$00,$00
+
+; T139 — amp bot-r
+.byte $C0,$80,$C0,$F0,$7C,$3C,$00,$00
+
+; T140 — lparen top-c
+.byte $00,$00,$00,$07,$1E,$3C,$78,$70
+
+; T141 — lparen top-r
+.byte $00,$00,$00,$80,$00,$00,$00,$00
+
+; T142 — lparen mid-c
+.byte $F0,$E0,$E0,$E0,$E0,$E0,$E0,$E0
+
+; T143 — lparen bot-c
+.byte $F0,$70,$78,$3C,$1E,$07,$00,$00
+
+; T144 — lparen bot-r
+.byte $00,$00,$00,$00,$00,$80,$00,$00
+
+; T145 — rparen top-l
+.byte $00,$00,$00,$01,$00,$00,$00,$00
+
+; T146 — rparen top-c
+.byte $00,$00,$00,$E0,$78,$3C,$1E,$0E
+
+; T147 — rparen mid-c
+.byte $0F,$07,$07,$07,$07,$07,$07,$07
+
+; T148 — rparen bot-l
+.byte $00,$00,$00,$00,$00,$01,$00,$00
+
+; T149 — rparen bot-c
+.byte $0F,$0E,$1E,$3C,$78,$E0,$00,$00
+
+; T150 — star top-c
+.byte $00,$00,$00,$00,$00,$38,$38,$39
+
+; T151 — star top-r
+.byte $00,$00,$00,$00,$00,$00,$00,$E0
+
+; T152 — star mid-l
+.byte $07,$01,$00,$00,$00,$01,$03,$07
+
+; T153 — star mid-c
+.byte $BB,$FF,$FE,$7C,$7C,$FF,$FF,$BB
+
+; T154 — star mid-r
+.byte $C0,$00,$00,$00,$00,$00,$80,$C0
+
+; T155 — star bot-c
+.byte $38,$38,$00,$00,$00,$00,$00,$00
+
+; T156 — less top-c
+.byte $00,$00,$00,$00,$01,$03,$0F,$1F
+
+; T157 — less top-r
+.byte $00,$00,$00,$7C,$F0,$E0,$80,$00
+
+; T158 — less mid-l
+.byte $00,$00,$03,$07,$1F,$07,$03,$00
+
+; T159 — less mid-c
+.byte $7C,$F8,$E0,$C0,$00,$C0,$E0,$F8
+
+; T160 — less bot-c
+.byte $7C,$1F,$0F,$03,$01,$00,$00,$00
+
+; T161 — less bot-r
+.byte $00,$00,$80,$E0,$F0,$7C,$00,$00
+
+; T162 — greater top-l
+.byte $00,$00,$00,$3E,$0F,$07,$01,$00
+
+; T163 — greater top-c
+.byte $00,$00,$00,$00,$80,$C0,$F0,$F8
+
+; T164 — greater mid-c
+.byte $3E,$1F,$07,$03,$00,$03,$07,$1F
+
+; T165 — greater mid-r
+.byte $00,$00,$C0,$E0,$F8,$E0,$C0,$00
+
+; T166 — greater bot-l
+.byte $00,$00,$01,$07,$0F,$3E,$00,$00
+
+; T167 — greater bot-c
+.byte $3E,$F8,$F0,$C0,$80,$00,$00,$00
+
+; T168 — lbrack top-c
+.byte $00,$00,$00,$FF,$FF,$E0,$E0,$E0
+
+; T169 — lbrack mid-c
+.byte $E0,$E0,$E0,$E0,$E0,$E0,$E0,$E0
+
+; T170 — lbrack bot-c
+.byte $E0,$E0,$E0,$E0,$FF,$FF,$00,$00
+
+; T171 — rbrack top-c
+.byte $00,$00,$00,$FF,$FF,$07,$07,$07
+
+; T172 — rbrack mid-c
+.byte $07,$07,$07,$07,$07,$07,$07,$07
+
+; T173 — rbrack bot-c
+.byte $07,$07,$07,$07,$FF,$FF,$00,$00
+
+; T174 — uparrow top-c
+.byte $00,$00,$00,$7C,$7C,$FE,$FF,$FF
+
+; T175 — uparrow mid-l
+.byte $07,$0F,$1E,$00,$00,$00,$00,$00
+
+; T176 — uparrow mid-c
+.byte $BB,$39,$38,$38,$38,$38,$38,$38
+
+; T177 — uparrow mid-r
+.byte $C0,$E0,$F0,$00,$00,$00,$00,$00
+
+; T178 — leftarrow top-c
+.byte $00,$00,$00,$00,$78,$F0,$E0,$C0
+
+; T179 — leftarrow mid-l
+.byte $03,$07,$0F,$3F,$3F,$3F,$0F,$07
+
+; T180 — leftarrow mid-c
+.byte $C0,$80,$00,$FF,$FF,$FF,$00,$80
+
+; T181 — leftarrow mid-r
+.byte $00,$00,$00,$FE,$FE,$FE,$00,$00
+
+; T182 — leftarrow bot-c
+.byte $C0,$C0,$E0,$F0,$78,$00,$00,$00
+
+; T183 — at mid-l
+.byte $70,$71,$73,$73,$73,$73,$73,$71
+
+; T184 — at mid-c
+.byte $7E,$FF,$C3,$81,$81,$81,$C3,$FF
+
+; T185 — at mid-r
+.byte $0E,$8E,$CE,$CE,$CE,$CE,$CE,$DE
+
+; T186 — at bot-c
+.byte $7E,$00,$00,$00,$FF,$FF,$00,$00
+
+; T187 — at bot-r
+.byte $FC,$00,$00,$00,$F0,$F0,$00,$00
+
+; T188 — I top-l
+.byte $00,$00,$00,$03,$03,$00,$00,$00
+
+; T189 — I top-c
+.byte $00,$00,$00,$FF,$FF,$38,$38,$38
+
+; T190 — I top-r
+.byte $00,$00,$00,$80,$80,$00,$00,$00
+
+; T191 — I bot-l
+.byte $00,$00,$00,$00,$03,$03,$00,$00
+
+; T192 — I bot-r
+.byte $00,$00,$00,$00,$80,$80,$00,$00
+
+; T193-T223 zero-filled (T224-T255 reserved for sprite data at $3F00)
+.res (224-193)*8, 0
 
 ; =============================================================================
 ;  BSS segment — runtime-only document buffer (not stored in PRG file)
