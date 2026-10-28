@@ -2,7 +2,9 @@
 # Run every check against the working tree:
 #   1. scan_keyboard unit test (py65, no emulator)
 #   2. beam-race check on NTSC, then PAL (VICE)
-#   3. screen-content comparison against a baseline commit (VICE, NTSC)
+#   3. screen-content comparison against a baseline commit (VICE, NTSC).
+#      The baseline is built with the working tree's glyph data, so glyph
+#      redesigns don't count as differences; only the scroll engine is compared.
 # VICE is closed after each run.
 #   usage: run_all.sh [baseline-ref]     (default: 7cbf4f5, last v1.1 commit
 #                                          before the beam-chasing scroll)
@@ -13,7 +15,7 @@ fail=0
 trap 'pkill x64sc 2>/dev/null' EXIT
 
 cur=$(./build_debug.sh) || exit 1
-old=$(./build_debug.sh "$base") || exit 1
+old=$(./build_debug.sh "$base" glyphs) || exit 1
 
 echo "== keyboard scan"
 out=$(python3 kbtest.py "$cur/labels.txt" "$cur/scroll.prg") || { echo "$out"; fail=1; }

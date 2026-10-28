@@ -1,18 +1,26 @@
 #!/bin/bash
 # Assemble a PRG plus VICE/ld65 label file into tests/vice/build/<name>/.
-#   usage: build_debug.sh            -> build/current/ from the working tree
-#          build_debug.sh <git-ref>  -> build/<ref>/ from that commit
+#   usage: build_debug.sh                   -> build/current/ from the working tree
+#          build_debug.sh <git-ref>         -> build/<ref>/ from that commit
+#          build_debug.sh <git-ref> glyphs  -> build/<ref>-glyphs/: that commit,
+#              with the glyph data (char map, tile sets, charset) from the
+#              working tree, so screen dumps differ only by scroll engine
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 ref=${1:-}
+glyphs=${2:-}
 name=${ref:-current}
+[ -n "$ref" ] && [ "$glyphs" = glyphs ] && name="$ref-glyphs"
 out="$here/build/$name"
 mkdir -p "$out"
 if [ -n "$ref" ]; then
     git -C "$root" show "$ref:scroll.s" > "$out/scroll.s"
     git -C "$root" show "$ref:c64scroll.cfg" > "$out/c64scroll.cfg"
     src="$out/scroll.s"; cfg="$out/c64scroll.cfg"
+    if [ "$glyphs" = glyphs ]; then
+        python3 "$here/splice_glyphs.py" "$root/scroll.s" "$src"
+    fi
 else
     src="$root/scroll.s"; cfg="$root/c64scroll.cfg"
 fi

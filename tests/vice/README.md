@@ -23,13 +23,18 @@ after each check.
 | Script | What it checks |
 |---|---|
 | `race.py` | Beam race. Scrolls forward, reverse, forward. Store watchpoints on the first and last byte each copy writes per row. It fails if a row is written before the beam fetched it in the start frame, or after its fetch with the new YSCROLL when the copy started on time. Late-started copies tear by design (fluidity over tearing) and are listed but don't fail. |
-| `content.py` | Screen regression. Dumps screen and colour RAM at every coarse step, 30 rows forward and back. `compare` checks two builds match and that scrolling back gives the same screens. |
+| `content.py` | Screen regression. Dumps screen and colour RAM at every coarse step, 30 rows forward and back. `compare` checks two builds match and that scrolling back gives the same screens. The baseline is built with the working tree's glyph data (see below), so redrawn or added glyphs don't count as differences. |
 | `kbtest.py` | `scan_keyboard` in the py65 simulator with a fake CIA. Checks matrix codes, SHIFT, CTRL/C= ignored, and cycle cost. |
 
 ## Pieces
 
-- `build_debug.sh [ref]` assembles the working tree, or a git ref, into
-  `build/<name>/` with an `ld65 -Ln` label file.
+- `build_debug.sh [ref [glyphs]]` assembles the working tree, or a git ref,
+  into `build/<name>/` with an `ld65 -Ln` label file. With `glyphs`, the ref
+  is built into `build/<ref>-glyphs/` with the working tree's glyph data.
+- `splice_glyphs.py <from.s> <into.s>` copies the glyph data (the
+  `tile_char_idx` through `tile_off_hi` tables and the `CHARSET` segment)
+  from one source into another. Both blocks end at the next `; ====` section
+  header, so a baseline must keep that layout.
 - `run_vice.sh ntsc|pal` starts VICE with the remote monitor on
   `127.0.0.1:6510`, without autostart.
 - `mon.py` is the monitor client. It also has `start_prompter()`, which boots
