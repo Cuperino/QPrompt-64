@@ -239,6 +239,7 @@ enter_scroll_mode:
         sta scroll_accum
         sta cs_pending
         sta cs_commit
+        sta cs_late
         sta enter_config
         sta fwd_limit_reached
 
@@ -368,6 +369,7 @@ enter_scroll_mode:
 @forever:
         lda enter_config
         bne @exit_req
+@check_req:
         lda cs_pending
         bne @service
         jmp @forever
@@ -380,14 +382,17 @@ enter_scroll_mode:
         jsr scroll_screen_down
         jmp @forever
 @exit_req:
-        ; Don't leave while a started copy waits for its YSCROLL update.
-        ; IRQs stay disabled from here on (disable_raster_restore_kernal
-        ; re-enables them), so no new request can slip in.
+        ; Don't leave while a copy and its YSCROLL update are out of step
+        ; (started copy waiting for vblank, or a down step already shown
+        ; whose copy hasn't run).  IRQs stay disabled from here on
+        ; (disable_raster_restore_kernal re-enables them), so no new request
+        ; can slip in.
         sei
         lda cs_commit
+        ora cs_late
         beq @exit_ok
         cli
-        jmp @forever
+        jmp @check_req
 @exit_ok:
         sta cs_pending              ; drop a coarse request that never started
 @exit_scroll:
@@ -1182,10 +1187,13 @@ irq_handler:
 @s2_no_commit:
         lda cs_pending
         beq @s2_apply
-        ; Coarse requested but main loop could not start it in time:
-        ; hold the current fine scroll one more frame.
-        jsr read_keyboard
-        jmp $EA81
+        ; Coarse requested but the main loop has not started it.  Fluid
+        ; motion matters more than avoiding tearing: show the step now and
+        ; let the main loop copy as soon as it can, racing the beam.  Until
+        ; the copy starts, the next step stops at the row boundary.
+@s2_late:
+        lda #1
+        sta cs_late
 @s2_apply:
         lda next_fine
         sta fine_scroll
@@ -1213,6 +1221,8 @@ irq_handler:
         bcs @s2_set                 ; still >= 0
         lda fwd_limit_reached
         bne @s2_stop0
+        lda cs_pending
+        bne @s2_stop_at0            ; previous request not copied yet
         lda fine_scroll
         clc
         adc #8
@@ -1223,6 +1233,10 @@ irq_handler:
 :       sta next_fine
         lda #1
         sta cs_pending
+        jmp $EA81
+@s2_stop_at0:
+        lda #0
+        sta next_fine
         jmp $EA81
 @s2_stop0:
         lda #0
@@ -1260,6 +1274,11 @@ irq_handler:
         sta current_step
         sta scroll_accum
         jmp $EA81
+:       lda cs_pending
+        beq :+
+        lda #7                      ; previous request not copied yet: stop
+        sta next_fine               ; at the row boundary
+        jmp $EA81
 :       lda s2_pixels
         sta next_fine
         lda #2
@@ -1292,28 +1311,6 @@ irq_handler:
 ; =============================================================================
 
 COARSE_START_LINE   = 57            ; row 0 is fetched by line 55 (YSCROLL 7)
-; Latest start lines that still finish before the next frame's fetches on
-; NTSC with margin (measured in VICE: starting at line 57 leaves ~3400 cy
-; going up and ~3200 cy going down; each line later costs 65 cy).  A request
-; that misses its window waits one frame; the IRQ holds the fine scroll.
-UP_WINDOW_END       = 100
-DOWN_WINDOW_END     = 95
-
-; ---- wait_window: wait until raster is in [57, A) and remember the frame ----
-; If the window is already over, waits for the next frame's window (the IRQ
-; holds the fine scroll for that frame).
-wait_window:
-        sta wait_tgt
-@ww:    bit VIC_CTRL1               ; raster bit 8
-        bmi @ww
-        lda VIC_RASTER
-        cmp #COARSE_START_LINE
-        bcc @ww
-        cmp wait_tgt
-        bcs @ww
-        lda frame_ctr
-        sta start_frame
-        rts
 
 ; ---- wait_beam_past: wait until the beam has fetched a text row -------------
 ; A = 49 + 8*row.  Returns once raster > row's bad line in the start frame,
@@ -1331,12 +1328,42 @@ wait_beam_past:
 @wb_done:
         rts
 
-; ---- commit: tell the IRQ a copy has started (show it at next vblank) ------
-coarse_commit:
+; ---- coarse_start: start a copy as early as possible, never a frame late ---
+; Goes as soon as the beam has fetched row 0 (raster 57..249 of the frame
+; after the request).  A late start may tear, but the step is still shown at
+; the next vblank.  If that vblank passed before the copy could start, the
+; IRQ has already shown the step (cs_late): copy right away with no beam
+; waits, racing the beam.
+coarse_start:
         sei
+        lda cs_late
+        bne @ss_late
+        bit VIC_CTRL1               ; raster >= 256: still the request vblank
+        bmi @ss_wait
+        lda VIC_RASTER
+        cmp #COARSE_START_LINE
+        bcc @ss_wait                ; rows not fetched yet this frame
+        cmp #250
+        bcc @ss_go                  ; >= 250: request vblank, or IRQ due now
+@ss_wait:
+        cli
+        jmp coarse_start
+@ss_go:
+        lda frame_ctr
+        sta start_frame
         lda #1
         sta cs_commit
         lda #0
+        sta cs_pending
+        cli
+        rts
+@ss_late:
+        lda frame_ctr
+        sec
+        sbc #1
+        sta start_frame             ; band waits return immediately
+        lda #0
+        sta cs_late
         sta cs_pending
         cli
         rts
@@ -1398,6 +1425,7 @@ scroll_screen_up:
         sta cs_commit
         lda #0
         sta cs_pending
+        sta cs_late
         cli
         rts
 @ssu_ok:
@@ -1423,9 +1451,7 @@ scroll_screen_up:
         sta zp_src
         stx zp_src+1
 
-        lda #UP_WINDOW_END
-        jsr wait_window
-        jsr coarse_commit
+        jsr coarse_start
         inc rows_from_start_lo
         bne :+
         inc rows_from_start_hi
@@ -1523,6 +1549,7 @@ scroll_screen_down:
         sta cs_commit
         lda #0
         sta cs_pending
+        sta cs_late
         cli
         rts
 @ssd_ok:
@@ -1557,9 +1584,7 @@ scroll_screen_down:
         dey
         bpl @ssd_stage
 
-        lda #DOWN_WINDOW_END
-        jsr wait_window
-        jsr coarse_commit
+        jsr coarse_start
         lda rows_from_start_lo
         bne :+
         dec rows_from_start_hi
@@ -4881,6 +4906,7 @@ frame_ctr:   .byte 0                    ; incremented every vblank (IRQ state 2)
 start_frame: .byte 0                    ; frame_ctr when a coarse copy started
 wait_tgt:    .byte 0                    ; raster line wait_beam_past waits for
 s2_pixels:   .byte 0                    ; IRQ state 2 scratch
+cs_late:     .byte 0                    ; 1 = coarse step already shown, copy not started
 
 ; Configurable colors
 cfg_font_color: .byte $0F               ; editor font color (C64 value, default light gray)
