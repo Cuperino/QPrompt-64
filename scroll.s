@@ -5227,7 +5227,7 @@ tile_sets:
 .byte  1,27, 3,  9,28,36,  6,29, 8
 ; Set 3  C: top bar open-right + left vert + bot bar open-right
 .byte  1,27, 0,  4, 0, 0,  6,29, 0
-; Set 4  D: frame with sharp left corners
+; Set 4  D: frame with square bottom-left corner
 .byte  1,27, 3,  4, 0, 5, 21,29, 8
 ; Set 5  E: top bar + mid bar left + bot bar
 .byte  1,27,32,  9,28, 0,  6,29,33
@@ -5235,20 +5235,20 @@ tile_sets:
 .byte  1,27,32,  9,28, 0,  4, 0, 0
 ; Set 7  G: C + right stub at mid (rounded)
 .byte  1,27, 0,  4, 0,18,  6,29, 8
-; Set 8  H: two verts + midbar
-.byte  1, 0, 3,  9,28,10,  6, 0, 8
+; Set 8  H: two straight verts + midbar
+.byte 15, 0,16,   9,28,10,  43, 0,79
 ; Set 9  I: centered with T/invT junctions
 .byte  0,19, 0,  0,12, 0,  0,20, 0
 ; Set 10 J: top right + right vert + bot frame
 .byte  0,27, 3,  0, 0, 5,  6,29, 8
-; Set 11 K: left vert + diagonals right + mid bar
-.byte  1, 0,25,  9,28, 0,  6, 0,22
+; Set 11 K: straight stem + upper arm meeting stem at mid + lower leg
+.byte 15,39,40, 41,42, 0, 43,44,45
 ; Set 12 L: left vert + bot bar
 .byte 15, 0, 0,  4, 0, 0,  6,29, 0
 ; Set 13 M: top bar with T junction + center stem + open legs
 .byte  1,19, 3,  4,12, 5,  4, 0, 5
-; Set 14 N: diagonal from TL to BR with verts
-.byte 30, 0,16,  4,22, 5,  4, 0,31
+; Set 14 N: straight verts + continuous 4px diagonal TL-BR
+.byte 46,47,16,  48,49,50,  43,51,52
 ; Set 15 O: frame
 .byte  1,27, 3,  4, 0, 5,  6,29, 8
 ; Set 16 P: top frame + mid-right-close + left vert
@@ -5263,64 +5263,64 @@ tile_sets:
 .byte 35,19,32,  0,12, 0,  0,12, 0
 ; Set 21 U: open top + bot frame
 .byte 15, 0,16,  4, 0, 5,  6,29, 8
-; Set 22 V: verts narrowing to U-shape bot
-.byte 15, 0,16,  6, 0, 8,  0,26, 0
+; Set 22 V: two mirrored diagonals meeting at bottom point
+.byte 53, 0,54,  55,56,57,   0,58, 0
 ; Set 23 W: verts + center stem + bot bar with invT junction
 .byte 15, 0,16,  4,12, 5,  6,20, 8
-; Set 24 X: mirrored corners + cross center
-.byte  3, 0, 1,  0,23, 0,  8, 0, 6
-; Set 25 Y: diagonal tops merge via Y-junction + center stem
-.byte 22, 0,25,  0,24, 0,  0,12, 0
-; Set 26 Z: top bar + diagonal mid + bot bar
-.byte  2,27, 3,  0,25, 0,  6,29, 7
+; Set 24 X: two continuous 4px diagonals crossing at center
+.byte 66,67,68,  69,70,71,  72,73,74
+; Set 25 Y: diagonal arms merge into center stem
+.byte 66,75,60,  76,77,63,   0,78, 0
+; Set 26 Z: square top/bot bars + continuous diagonal
+.byte 35,80,81,  59,82,83,  84,85,33
 ; Set 27 0: frame
 .byte  1,27, 3,  4, 0, 5,  6,29, 8
-; Set 28 1: center col with invT bot bar
-.byte  0,19, 0,  0, 4, 0,  0, 6, 0
-; Set 29 2: top-right + corner mid-right + bot-left
-.byte  1,27, 3,  0,28,14,  6,29, 7
+; Set 28 1: center stem + flag + base bar
+.byte 92,93, 0,   0,12, 0,  94,95,96
+; Set 29 2: top arch + diagonal + bot bar
+.byte  1,27, 3,   0,39,97,  98,99,33
 ; Set 30 3: right-side only open on left
 .byte  0,27, 3,  0,28,10,  0,29, 8
 ; Set 31 4: verts + rounded mid-left + midbar + right leg
 .byte 15, 0,16, 17,28,10,  0, 0, 5
-; Set 32 5: top-left + mid + corner mid-right + bot-right
-.byte  1,27,32,  9,28, 3,  0,29, 8
+; Set 32 5: square top bar + left vert + 3-style bowl
+.byte 100,27,32,  101,102,103,  34,29, 8
 ; Set 33 6: C + midbar + corner mid-right + bot frame
 .byte  1,27,32,  9,28, 3,  6,29, 8
-; Set 34 7: top bar + right descent
-.byte  0,27, 3,  0, 0, 5,  0, 0, 5
+; Set 34 7: top bar + diagonal descent
+.byte 35,27,104,   0,105,106,   0,107,108
 ; Set 35 8: frame + midbar (= H with closed sides)
 .byte  1,27, 3,  9,28,10,  6,29, 8
 ; Set 36 9: top frame + mid (rounded left) + bot-right
 .byte  1,27, 3, 17,28,10,  0,29, 8
-; Set 37 ,: dot at bot-left
-.byte  0, 0, 0,  0, 0, 0,  6, 0, 0
+; Set 37 ,: dot at bot-center + tail
+.byte  0, 0, 0,   0, 0, 0,   0,112, 0
 ; Set 38 .: dot at bot-center
 .byte  0, 0, 0,  0, 0, 0,  0,13, 0
-; Set 39 !: center vert + bot dot
-.byte  0,12, 0,  0,12, 0,  0,13, 0
-; Set 40 ?: top-right curve + mid + bot dot
-.byte  0,27, 3,  0,28, 0,  0,13, 0
+; Set 39 !: center vert (padded) + bot dot
+.byte  0,111, 0,   0,12, 0,   0,13, 0
+; Set 40 ?: top arch + hook into stem + bot dot
+.byte  1,27, 3,   0,109,110,   0,13, 0
 ; Set 41 -: center midbar
 .byte  0, 0, 0,  0,28, 0,  0, 0, 0
 ; Set 42 :: two dots
 .byte  0,13, 0,  0, 0, 0,  0,13, 0
 ; Set 43 ': apostrophe at top-center
 .byte  0,13, 0,  0, 0, 0,  0, 0, 0
-; Set 44 #: two horiz bars crossing two verticals
-.byte  9,28,10,  4, 0, 5,  9,28,10
+; Set 44 #: two inset verticals crossed by two bars (padded)
+.byte 113,114,115,  116,117,118,  119,120,121
 ; Set 45 ": double-quote ticks at top-center
 .byte  0,38, 0,  0, 0, 0,  0, 0, 0
 ; Set 46 $: S-shape with vertical stroke through center
 .byte  1,19,32, 17,37,18, 34,20, 8
-; Set 47 %: dots at TL/BR with forward-slash diagonal
-.byte 13, 0,25,  0,25, 0, 25, 0,13
+; Set 47 %: rounded dots at TL/BR + continuous slash
+.byte 90,59,60,  61,62,63,  64,65,91
 ; Set 48 @: frame with inner loop, open bottom-right
 .byte  1,27, 3,  4,28,18,  6,29, 0
-; Set 49 /: forward-slash diagonal (TR to BL)
-.byte  0, 0,25,  0,25, 0, 25, 0, 0
-; Set 50 \: backslash diagonal (TL to BR)
-.byte 22, 0, 0,  0,22, 0,  0, 0,22
+; Set 49 /: continuous forward-slash diagonal (TR to BL)
+.byte  0,59,60,  61,62,63,  64,65, 0
+; Set 50 \: continuous backslash diagonal (TL to BR)
+.byte 86,87, 0,  51,49,47,   0,88,89
 
 ; Precomputed pointers into tile_sets (lo and hi bytes)
 tile_off_lo:
@@ -5418,13 +5418,17 @@ spr_left_tri:   ; at $3040
 ;   9  hmid-left  10 hmid-ctr   11 hmid-right  12 full-blk
 ;  13  ctr-vert   14 ctr-dot    15 mid-close-r
 ;  16  top-l-vert 17 top-r-vert 18 hmid-l-close 19 hmid-r-close
-;  20  top-ctr-T  21 bot-l-sq
+;  20  top-ctr-T  21 bot-l-sq (right angle)
 ;  22  diag-tlbr  23 cross      24 y-junction  25 diag-trbl
 ;  26  u-shape
 ;  27  top-ctr-w  28 hmid-ctr-w 29 bot-ctr-w
 ;  30  n-tl-diag  31 n-br-diag
 ;  32  top-r-bar  33 bot-r-bar  34 bot-l-bar  35 top-l-bar
 ;  36  hmid-r-notch  37 cvert+midbar  38 dquote-ticks
+;  39-42,44,45 K arms/junction  43 bot-l-vert
+;  46-79 N, V, /, X, Y, H strokes (see per-tile comments)
+;  80-112 Z, \, %, 1, 2, 5, 7, ?, !, comma strokes
+;  113-121 hash strokes
 ;
 ;  Padding: 3px top / 2px bottom, 1px margin left/right of each glyph.
 ;  Horizontal values: $70=01110000 (left 3px, 1px L-margin)
@@ -5505,9 +5509,9 @@ spr_left_tri:   ; at $3040
 ;        inverted-T junction: stem ascending into full-width bar (I bot, 1 bot)
 .byte $38,$38,$38,$7C,$FF,$C7,$00,$00
 
-; T21 — bot-left corner  (3-row left vert, curve into bar, 2px bot pad)
+; T21 — bot-left square corner  (4-row left vert, right angle into 2-row bar, 2px bot pad)
 ;        used in D
-.byte $70,$70,$70,$78,$3F,$07,$00,$00
+.byte $70,$70,$70,$70,$7F,$7F,$00,$00
 
 ; T22 — diagonal TL-BR (4px stroke from top-left to bottom-right, full width)
 ;        used in N, Z, X, Y corners
@@ -5577,8 +5581,259 @@ spr_left_tri:   ; at $3040
 ;        used in top-center of "
 .byte $00,$00,$00,$66,$66,$66,$00,$00
 
-; T39-T223 zero-filled (T224-T255 reserved for sprite data at $3F00)
-.res (224-39)*8, 0
+; T39-T45 — letter K (24x24 glyph, stem cols 1-3, rows 3-21)
+
+; T39 — K top-ctr (upper arm entering from top-right)
+.byte $00,$00,$00,$00,$01,$07,$1F,$7E
+
+; T40 — K top-right (upper arm tip, 3px top pad, 1px R-margin)
+.byte $00,$00,$00,$7E,$F8,$E0,$80,$00
+
+; T41 — K mid-left (stem with arm junction)
+.byte $71,$77,$7F,$7F,$73,$71,$70,$70
+
+; T42 — K mid-ctr (upper arm end + lower leg start)
+.byte $F8,$E0,$80,$C0,$E0,$F0,$F8,$3E
+
+; T43 — bot-left-vert (straight left vert, 2px bot pad)
+.byte $70,$70,$70,$70,$70,$70,$00,$00
+
+; T44 — K bot-ctr (lower leg)
+.byte $1F,$0F,$03,$01,$00,$00,$00,$00
+
+; T45 — K bot-right (lower leg tip, 2px bot pad, 1px R-margin)
+.byte $00,$80,$E0,$F0,$F8,$3E,$00,$00
+
+; T46 — N top-l
+.byte $00,$00,$00,$78,$7C,$7E,$7F,$77
+
+; T47 — N top-c
+.byte $00,$00,$00,$00,$00,$00,$00,$80
+
+; T48 — N mid-l
+.byte $73,$71,$70,$70,$70,$70,$70,$70
+
+; T49 — N mid-c
+.byte $C0,$E0,$F0,$78,$3C,$1E,$0F,$07
+
+; T50 — N mid-r
+.byte $0E,$0E,$0E,$0E,$0E,$0E,$0E,$8E
+
+; T51 — N bot-c
+.byte $03,$01,$00,$00,$00,$00,$00,$00
+
+; T52 — N bot-r
+.byte $CE,$EE,$FE,$7E,$3E,$1E,$00,$00
+
+; T53 — V top-l
+.byte $00,$00,$00,$78,$3C,$3C,$1E,$1E
+
+; T54 — V top-r
+.byte $00,$00,$00,$1E,$3C,$3C,$78,$78
+
+; T55 — V mid-l
+.byte $0F,$0F,$07,$07,$03,$03,$01,$01
+
+; T56 — V mid-c
+.byte $00,$00,$81,$81,$C3,$C3,$E7,$E7
+
+; T57 — V mid-r
+.byte $F0,$F0,$E0,$E0,$C0,$C0,$80,$80
+
+; T58 — V bot-c
+.byte $FF,$FF,$7E,$7E,$3C,$3C,$00,$00
+
+; T59 — slash top-c
+.byte $00,$00,$00,$00,$00,$00,$01,$03
+
+; T60 — slash top-r
+.byte $00,$00,$00,$3C,$78,$F0,$E0,$C0
+
+; T61 — slash mid-l
+.byte $00,$00,$00,$00,$00,$00,$00,$01
+
+; T62 — slash mid-c
+.byte $03,$07,$0F,$1E,$3C,$78,$F0,$E0
+
+; T63 — slash mid-r
+.byte $C0,$80,$00,$00,$00,$00,$00,$00
+
+; T64 — slash bot-l
+.byte $03,$03,$07,$0F,$1E,$3C,$00,$00
+
+; T65 — slash bot-c
+.byte $C0,$C0,$80,$00,$00,$00,$00,$00
+
+; T66 — X top-l
+.byte $00,$00,$00,$78,$3C,$1E,$0F,$07
+
+; T67 — X top-c
+.byte $00,$00,$00,$00,$00,$00,$00,$81
+
+; T68 — X top-r
+.byte $00,$00,$00,$1E,$3C,$78,$F0,$E0
+
+; T69 — X mid-l
+.byte $03,$01,$00,$00,$00,$00,$00,$01
+
+; T70 — X mid-c
+.byte $C3,$E7,$FF,$7E,$3C,$7E,$FF,$E7
+
+; T71 — X mid-r
+.byte $C0,$80,$00,$00,$00,$00,$00,$80
+
+; T72 — X bot-l
+.byte $03,$07,$0F,$1E,$3C,$78,$00,$00
+
+; T73 — X bot-c
+.byte $C3,$81,$00,$00,$00,$00,$00,$00
+
+; T74 — X bot-r
+.byte $C0,$E0,$F0,$78,$3C,$1E,$00,$00
+
+; T75 — Y top-c
+.byte $00,$00,$00,$00,$00,$00,$01,$83
+
+; T76 — Y mid-l
+.byte $07,$03,$01,$00,$00,$00,$00,$00
+
+; T77 — Y mid-c
+.byte $83,$C7,$EF,$FE,$7C,$38,$38,$38
+
+; T78 — Y bot-c
+.byte $38,$38,$38,$38,$38,$38,$00,$00
+
+; T79 — H bot-r
+.byte $0E,$0E,$0E,$0E,$0E,$0E,$00,$00
+
+; T80 — Z top-c
+.byte $00,$00,$00,$FF,$FF,$00,$00,$01
+
+; T81 — Z top-r
+.byte $00,$00,$00,$FE,$FE,$7E,$FC,$F8
+
+; T82 — Z mid-c
+.byte $03,$0F,$1F,$3F,$7E,$FC,$F8,$F0
+
+; T83 — Z mid-r
+.byte $F0,$C0,$80,$00,$00,$00,$00,$00
+
+; T84 — Z bot-l
+.byte $0F,$1F,$3F,$7E,$7F,$7F,$00,$00
+
+; T85 — Z bot-c
+.byte $C0,$80,$00,$00,$FF,$FF,$00,$00
+
+; T86 — backslash top-l
+.byte $00,$00,$00,$3C,$1E,$0F,$07,$03
+
+; T87 — backslash top-c
+.byte $00,$00,$00,$00,$00,$00,$80,$C0
+
+; T88 — backslash bot-c
+.byte $03,$03,$01,$00,$00,$00,$00,$00
+
+; T89 — backslash bot-r
+.byte $C0,$C0,$E0,$F0,$78,$3C,$00,$00
+
+; T90 — percent top-l
+.byte $00,$00,$00,$38,$7C,$7C,$7C,$38
+
+; T91 — percent bot-r
+.byte $00,$1C,$3E,$3E,$3E,$1C,$00,$00
+
+; T92 — 1 top-l
+.byte $00,$00,$00,$00,$03,$0F,$0E,$00
+
+; T93 — 1 top-c
+.byte $00,$00,$00,$F8,$F8,$B8,$38,$38
+
+; T94 — 1 bot-l
+.byte $00,$00,$00,$00,$07,$07,$00,$00
+
+; T95 — 1 bot-c
+.byte $38,$38,$38,$38,$FF,$FF,$00,$00
+
+; T96 — 1 bot-r
+.byte $00,$00,$00,$00,$C0,$C0,$00,$00
+
+; T97 — 2 mid-r
+.byte $0E,$0E,$1E,$7C,$F8,$E0,$80,$00
+
+; T98 — 2 bot-l
+.byte $01,$07,$1F,$7E,$7F,$7F,$00,$00
+
+; T99 — 2 bot-c
+.byte $F8,$E0,$80,$00,$FF,$FF,$00,$00
+
+; T100 — 5 top-l
+.byte $00,$00,$00,$7F,$7F,$70,$70,$70
+
+; T101 — 5 mid-l
+.byte $70,$70,$7F,$7F,$00,$00,$00,$00
+
+; T102 — 5 mid-c
+.byte $00,$00,$FF,$FF,$00,$00,$00,$00
+
+; T103 — 5 mid-r
+.byte $00,$00,$C0,$F0,$FC,$1E,$0E,$0E
+
+; T104 — 7 top-r
+.byte $00,$00,$00,$FE,$FE,$3E,$7C,$7C
+
+; T105 — 7 mid-c
+.byte $00,$00,$01,$01,$03,$03,$07,$0F
+
+; T106 — 7 mid-r
+.byte $F8,$F8,$F0,$F0,$E0,$E0,$C0,$80
+
+; T107 — 7 bot-c
+.byte $0F,$1F,$1F,$3E,$3E,$7C,$00,$00
+
+; T108 — 7 bot-r
+.byte $80,$00,$00,$00,$00,$00,$00,$00
+
+; T109 — question mid-c
+.byte $00,$00,$00,$03,$0F,$1E,$38,$38
+
+; T110 — question mid-r
+.byte $0E,$1E,$7C,$F0,$80,$00,$00,$00
+
+; T111 — exclam top-c
+.byte $00,$00,$00,$38,$38,$38,$38,$38
+
+; T112 — comma bot-c
+.byte $00,$00,$38,$38,$38,$38,$30,$E0
+
+; T113 — hash top-l
+.byte $00,$00,$00,$03,$03,$03,$03,$03
+
+; T114 — hash top-c
+.byte $00,$00,$00,$81,$81,$81,$81,$81
+
+; T115 — hash top-r
+.byte $00,$00,$00,$C0,$C0,$C0,$C0,$C0
+
+; T116 — hash mid-l
+.byte $7F,$7F,$03,$03,$03,$03,$03,$7F
+
+; T117 — hash mid-c
+.byte $FF,$FF,$81,$81,$81,$81,$81,$FF
+
+; T118 — hash mid-r
+.byte $FE,$FE,$C0,$C0,$C0,$C0,$C0,$FE
+
+; T119 — hash bot-l
+.byte $7F,$03,$03,$03,$03,$03,$00,$00
+
+; T120 — hash bot-c
+.byte $FF,$81,$81,$81,$81,$81,$00,$00
+
+; T121 — hash bot-r
+.byte $FE,$C0,$C0,$C0,$C0,$C0,$00,$00
+
+; T122-T223 zero-filled (T224-T255 reserved for sprite data at $3F00)
+.res (224-122)*8, 0
 
 ; =============================================================================
 ;  BSS segment — runtime-only document buffer (not stored in PRG file)
