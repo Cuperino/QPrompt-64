@@ -33,7 +33,7 @@ BASIC SYS stub at $0801 jumps to code at $080D.
 1. **Config screen** — user adjusts `baseSpeed` and `accelerationCurvature` with cursor keys, RETURN starts
 2. **Velocity table build** — uses BASIC ROM float routines (FPWRT, FMULT, etc.) to compute `speed = baseSpeed * step^curvature` for steps 0–9 as 8.8 fixed-point
 3. **Init** — clear screen, set color RAM (3-tier: white/light-gray/white), configure sprites, install raster IRQ chain
-4. **Main loop** — tight idle loop (all instructions ≤3 cycles for ≤2-cycle IRQ jitter), services `do_coarse` and `do_coarse_down` flags by calling coarse scroll routines
+4. **Main loop** — services coarse scroll requests (`cs_pending`: 1=up, 2=down) by calling `scroll_screen_up` / `scroll_screen_down`; exits to config/editor only when no started copy is waiting for its YSCROLL update (`cs_commit`)
 
 ### Raster IRQ Chain (5-point)
 
@@ -44,7 +44,11 @@ State 0 (raster 119) → State 3 (137→138) → State 1 (175) → State 2 (250)
 - **State 0**: Zone on — set dark gray background for reading region
 - **State 3**: Double-IRQ CSEL border-open — cycle-exact unrolled loop for 21 sprite lines (140–160), 3-cycle dodge window
 - **State 1**: Zone off — restore black background
-- **State 2**: Scroll update — read keyboard ($CB for key, $028D for SHIFT LOCK), accumulate 8.8 velocity, apply pixels to `fine_scroll`, set coarse scroll flags
+- **State 2**: Scroll update — show `next_fine` (computed last frame) in YSCROLL, scan the keyboard matrix itself (`scan_keyboard`, replaces the KERNAL scan), accumulate 8.8 velocity, compute the next frame's `next_fine` and set `cs_pending` when it needs a coarse scroll. If a request was not started in time, it holds the fine scroll for a frame instead.
+
+### Coarse Scroll Pipeline (beam chasing)
+
+Fine scroll is pipelined one frame so the coarse copy can start before its result is shown. The main loop starts the copy at raster ≥57 (row 0 already fetched, `wait_window`), sets `cs_commit`, and the next vblank applies the new YSCROLL. Each row is therefore rewritten after the beam fetched it in the current frame and before its fetch in the next one. The screen is split into bands processed top-down; each band waits (`wait_beam_past`) until the beam has fetched its bottom row. Up uses compact column loops; down is fully unrolled and saves each band's bottom row for the next band. Zone colour remaps (rows 8/15 up, 9/16 down) happen inline. `UP_WINDOW_END`/`DOWN_WINDOW_END` are the latest start lines that still finish in time on NTSC.
 
 ### Velocity System
 
@@ -57,6 +61,6 @@ Sprites sit in the left border area. To prevent the VIC-II border flip-flop from
 ### Key Conventions
 
 - **Screen codes** not PETSCII: `sc_A`–`sc_Z` = $01–$1A, `__` = space ($20), `_c` = comma, `_d` = period
-- **IRQ exits**: timing-critical state 3 pass 1 → `$EA81` (quick RTI); all others → `$EA31` (full KERNAL handler including keyboard scan)
+- **IRQ exits**: all raster IRQ states exit via `$EA81` (quick RTI); the KERNAL handler (`$EA31`) does not run during scrolling — `scan_keyboard` mirrors the key into `$CB`/`$C5` so the KERNAL doesn't see a held key as a new press afterwards
 - Self-modifying code used in `build_velocity_table` (save/restore X via immediate operand patching)
 - BASIC ROM float routines called at startup only (GIVAYF, MOVFM, MOVFA, FPWRT, FMULT, GETADR, FOUT, MOVMF) — safe because KERNAL IRQs are still active and no custom IRQ chain is installed yet

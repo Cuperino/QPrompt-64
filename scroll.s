@@ -34,7 +34,6 @@ VIC_SPR0_COL    = $D027
 VIC_SPR1_COL    = $D028
 
 CIA1_ICR        = $DC0D
-SHIFT_FLAG      = $028D             ; KERNAL shift key status (bit 0 = SHIFT)
 CURR_KEY        = $CB               ; KERNAL current key matrix code ($40 = none)
 
 ; BASIC ROM floating-point routines
@@ -77,11 +76,11 @@ fine_scroll:    .res 1              ; current fine-scroll value (7..0)
 text_lo:        .res 1              ; pointer into text_data (low)
 text_hi:        .res 1              ; pointer into text_data (high)
 irq_state:      .res 1              ; 0=zone_on, 1=zone_off, 2=scroll, 3=indicator_on, 4=indicator_off
-do_coarse:      .res 1              ; pending forward coarse scroll count
+cs_pending:     .res 1              ; coarse scroll requested by IRQ: 0=none, 1=up, 2=down
 current_step:   .res 1              ; current velocity step (0-9)
 direction:      .res 1              ; 1=forward (up), $FF=reverse (down)
 scroll_accum:   .res 1              ; fractional accumulator (8.8 low byte)
-do_coarse_down: .res 1              ; pending reverse coarse scroll count
+cs_commit:      .res 1              ; set by main loop: 1=copy started, 2=fwd limit, 3=rev floor
 enter_config:   .res 1              ; flag: 0=none, 1=config, 2=editor
 cursor_x:       .res 1              ; editor cursor column 0-39
 cursor_y:       .res 1              ; editor cursor row 0-23
@@ -238,8 +237,8 @@ enter_scroll_mode:
         sta direction
         lda #0
         sta scroll_accum
-        sta do_coarse
-        sta do_coarse_down
+        sta cs_pending
+        sta cs_commit
         sta enter_config
         sta fwd_limit_reached
 
@@ -347,6 +346,7 @@ enter_scroll_mode:
         sta irq_state
 
         lda fine_scroll
+        sta next_fine               ; nothing pending: next frame = same
         ora #%00010000              ; DEN=1, YSCROLL=fine_scroll
         sta VIC_CTRL1
         lda #(RASTER_ZONE_ON - 3)
@@ -360,23 +360,36 @@ enter_scroll_mode:
 
         cli
 
-; Main idle loop — all instructions ≤3 cycles, bounding IRQ jitter to ≤2 cy.
+; Main loop — services coarse-scroll requests from the IRQ.
+; The IRQ computes each frame's fine scroll one frame ahead; when it needs a
+; coarse scroll it sets cs_pending.  The coarse routines start their copy just
+; after the beam has fetched the top rows, so the copy runs behind the beam
+; and has a full frame to finish before the new layout is shown.
 @forever:
-        lda enter_config            ; 3 cy
-        bne @exit_scroll            ; 2 cy (not taken)
-        lda do_coarse               ; 3 cy
-        bne @do_up                  ; 2 cy (not taken)
-        lda do_coarse_down          ; 3 cy
-        bne @do_down                ; 2 cy (not taken)
-        jmp @forever                ; 3 cy
-@do_up:
-        dec do_coarse
+        lda enter_config
+        bne @exit_req
+        lda cs_pending
+        bne @service
+        jmp @forever
+@service:
+        cmp #1
+        bne @svc_down
         jsr scroll_screen_up
         jmp @forever
-@do_down:
-        dec do_coarse_down
+@svc_down:
         jsr scroll_screen_down
         jmp @forever
+@exit_req:
+        ; Don't leave while a started copy waits for its YSCROLL update.
+        ; IRQs stay disabled from here on (disable_raster_restore_kernal
+        ; re-enables them), so no new request can slip in.
+        sei
+        lda cs_commit
+        beq @exit_ok
+        cli
+        jmp @forever
+@exit_ok:
+        sta cs_pending              ; drop a coarse request that never started
 @exit_scroll:
         ; enter_config: 1=F1, 2=F3, 3=T, 4=search prev #, 5=search next #
         lda enter_config
@@ -1138,15 +1151,49 @@ irq_handler:
 
 @state2:
         ; --- State 2: scroll update (raster 250) ---
+        ; Fine scroll is pipelined one frame: this IRQ shows the value
+        ; computed last frame, then computes the next one.  When the next
+        ; value needs a coarse scroll, the main loop does the copy during the
+        ; coming frame (behind the beam) and the result is shown here at the
+        ; following vblank.
         lda #(RASTER_ZONE_ON - 3)
         sta VIC_RASTER
         lda #0
         sta irq_state
+        inc frame_ctr
 
-        ; --- Read keyboard and update step/direction ---
+        ; --- Apply ---
+        lda cs_commit
+        beq @s2_no_commit
+        ldx #0
+        stx cs_commit
+        cmp #1
+        beq @s2_apply               ; copy underway → show post-coarse value
+        ; Main loop hit a limit (2 = forward limit, 3 = reverse floor):
+        ; snap fine scroll and stop
+        stx current_step
+        stx scroll_accum
+        cmp #2
+        beq @s2_lim
+        ldx #7
+@s2_lim:
+        stx next_fine
+        jmp @s2_apply
+@s2_no_commit:
+        lda cs_pending
+        beq @s2_apply
+        ; Coarse requested but main loop could not start it in time:
+        ; hold the current fine scroll one more frame.
         jsr read_keyboard
+        jmp $EA81
+@s2_apply:
+        lda next_fine
+        sta fine_scroll
+        ora #%00010000
+        sta VIC_CTRL1
 
-        ; --- Accumulate velocity ---
+        ; --- Read keyboard, accumulate velocity ---
+        jsr read_keyboard
         ldx current_step
         clc
         lda scroll_accum
@@ -1154,87 +1201,186 @@ irq_handler:
         sta scroll_accum
         lda velocity_hi, x
         adc #0                      ; A = integer pixels to scroll
-        beq @s2_done                ; 0 pixels → skip
+        beq @s2_done                ; 0 pixels → next_fine = fine_scroll
+        ldx direction
+        bmi @s2_reverse
 
-        tax                         ; X = pixel count
-        lda direction
-        bmi @s2_reverse_dbl
+        ; --- Forward: fine scroll decreases, coarse up below 0 ---
+        sta s2_pixels
+        lda fine_scroll
+        sec
+        sbc s2_pixels
+        bcs @s2_set                 ; still >= 0
+        lda fwd_limit_reached
+        bne @s2_stop0
+        lda fine_scroll
+        clc
+        adc #8
+        sec
+        sbc s2_pixels               ; fine + 8 - n
+        bcs :+
+        lda #0                      ; more than one row per frame: clamp
+:       sta next_fine
+        lda #1
+        sta cs_pending
+        jmp $EA81
+@s2_stop0:
+        lda #0
+        sta next_fine
+        sta current_step
+        sta scroll_accum
+        jmp $EA81
+@s2_set:
+        sta next_fine
+@s2_done:
+        jmp $EA81
 
-        jmp @s2_fwd
-
-@s2_reverse_dbl:
-        txa
-        asl a                       ; double speed for reverse
+        ; --- Reverse (double speed): fine scroll increases, coarse down above 7 ---
+@s2_reverse:
+        asl a
         bcc :+
         lda #$FF                    ; clamp to 255 on overflow
-:       tax
-        jmp @s2_reverse
-
-        ; --- Forward: decrement fine_scroll, coarse up on underflow ---
-@s2_fwd:
-        dec fine_scroll
-        lda fine_scroll
-        bpl @s2_fwd_next
-        ; fine_scroll underflowed — check forward limit
-        lda fwd_limit_reached
-        bne @s2_fwd_clamp
-        lda #7
-        sta fine_scroll
-        inc do_coarse
-@s2_fwd_next:
-        dex
-        bne @s2_fwd
-        jmp @s2_update_vic
-@s2_fwd_clamp:
-        ; At forward limit: snap fine_scroll to 0, zero velocity
-        lda #0
-        sta fine_scroll
-        sta current_step
-        sta scroll_accum
-        jmp @s2_update_vic
-
-        ; --- Reverse: increment fine_scroll, coarse down on overflow ---
-@s2_reverse:
-@s2_rev:
-        inc fine_scroll
-        lda fine_scroll
+:       clc
+        adc fine_scroll
+        bcs :+
         cmp #8
-        bcc @s2_rev_next
-        ; fine_scroll overflowed — check if at starting position
+        bcc @s2_set                 ; still <= 7
+        sbc #8                      ; carry set here
+        cmp #8
+        bcc :++
+:       lda #7                      ; more than one row per frame: clamp
+:       sta s2_pixels
         lda rows_from_start_lo
-        bne @s2_do_coarse
-        lda rows_from_start_hi
-        bne @s2_do_coarse
-        ; At start: clamp, snap fine_scroll to 7, zero velocity
+        ora rows_from_start_hi
+        bne :+
+        ; At start of document: snap to 7, stop
         lda #7
-        sta fine_scroll
+        sta next_fine
         lda #0
         sta current_step
         sta scroll_accum
-        jmp @s2_update_vic
-@s2_do_coarse:
-        lda #0
-        sta fine_scroll
-        inc do_coarse_down
-@s2_rev_next:
-        dex
-        bne @s2_rev
-
-@s2_update_vic:
-        lda fine_scroll
-        ora #%00010000
-        sta VIC_CTRL1
-@s2_done:
-        jmp $EA31
+        jmp $EA81
+:       lda s2_pixels
+        sta next_fine
+        lda #2
+        sta cs_pending
+        jmp $EA81
 
 
 .segment "SCROLL"
 
-; ---- Coarse scroll ----------------------------------------------------------
+; =============================================================================
+;  Coarse scroll — beam-chasing copy
+;
+;  The IRQ requests a coarse scroll one frame before it is shown.  The copy
+;  starts once the beam has fetched the rows it overwrites (raster >= 57 for
+;  row 0), so the current frame still shows the old layout.  From there it
+;  has until the same row's fetch in the next frame, when the IRQ has
+;  switched YSCROLL.  That is almost a full frame per row instead of the
+;  ~60-line vblank head start of a copy that begins at raster 250.
+;
+;  Both directions split the screen into bands processed top to bottom.
+;  Each band first waits until the beam has fetched its bottom row.
+;
+;  Up:   row r <- row r+1.  The source rows of a band are not touched by
+;        earlier bands, so bands are compact column loops (~18 cy/char).
+;  Down: row r <- row r-1 must run bottom-up inside a band, and the band
+;        above has already overwritten its source top row, so each band
+;        first saves its bottom row for the next one.  Down is the heavier
+;        direction (saves, and the YSCROLL after it is small, so deadlines
+;        come early), so it is fully unrolled (16 cy/char).
+; =============================================================================
+
+COARSE_START_LINE   = 57            ; row 0 is fetched by line 55 (YSCROLL 7)
+; Latest start lines that still finish before the next frame's fetches on
+; NTSC with margin (measured in VICE: starting at line 57 leaves ~3400 cy
+; going up and ~3200 cy going down; each line later costs 65 cy).  A request
+; that misses its window waits one frame; the IRQ holds the fine scroll.
+UP_WINDOW_END       = 100
+DOWN_WINDOW_END     = 95
+
+; ---- wait_window: wait until raster is in [57, A) and remember the frame ----
+; If the window is already over, waits for the next frame's window (the IRQ
+; holds the fine scroll for that frame).
+wait_window:
+        sta wait_tgt
+@ww:    bit VIC_CTRL1               ; raster bit 8
+        bmi @ww
+        lda VIC_RASTER
+        cmp #COARSE_START_LINE
+        bcc @ww
+        cmp wait_tgt
+        bcs @ww
+        lda frame_ctr
+        sta start_frame
+        rts
+
+; ---- wait_beam_past: wait until the beam has fetched a text row -------------
+; A = 49 + 8*row.  Returns once raster > row's bad line in the start frame,
+; or immediately if that frame is already over.
+wait_beam_past:
+        clc
+        adc fine_scroll
+        sta wait_tgt
+@wb:    lda frame_ctr
+        cmp start_frame
+        bne @wb_done
+        lda VIC_RASTER
+        cmp wait_tgt
+        bcc @wb
+@wb_done:
+        rts
+
+; ---- commit: tell the IRQ a copy has started (show it at next vblank) ------
+coarse_commit:
+        sei
+        lda #1
+        sta cs_commit
+        lda #0
+        sta cs_pending
+        cli
+        rts
+
+; ---- Coarse scroll up (forward) ---------------------------------------------
+
+; Colour value for destination row r (up), read into A: remap across zone edges.
+.macro SSU_COLFIX r
+    .if r = 8                       ; inner(9) → outer(8): light → base
+        and #$0F
+        tay
+        lda color_to_base, y
+    .elseif r = 15                  ; outer(16) → inner(15): base → light
+        and #$0F
+        tay
+        lda color_to_light, y
+    .endif
+.endmacro
+
+; One band: destination rows first..last get rows first+1..last+1.
+.macro SSU_BAND first, last
+        .local loop
+        lda #(49 + 8*last)
+        jsr wait_beam_past
+        ldx #COLS-1
+loop:
+    .repeat last-first+1, k
+        lda SCREEN + (first+k+1)*COLS, x
+        sta SCREEN + (first+k)*COLS, x
+        lda COLRAM + (first+k+1)*COLS, x
+        SSU_COLFIX (first+k)
+        sta COLRAM + (first+k)*COLS, x
+    .endrepeat
+        dex
+    .if * - loop < 126
+        bpl loop
+    .else
+        bmi :+
+        jmp loop
+:
+    .endif
+.endmacro
+
 scroll_screen_up:
-        ; --- Direction guard: cancel stale forward scrolls if now reversing ---
-        lda direction
-        bmi @ssu_cancel
         ; --- Forward limit check: rows_from_start >= max_rows_fwd? ---
         lda rows_from_start_hi
         cmp max_rows_fwd_hi
@@ -1244,106 +1390,60 @@ scroll_screen_up:
         cmp max_rows_fwd_lo
         bcc @ssu_ok                 ; lo < → allow
 @ssu_limit:
-        ; At forward limit: snap fine_scroll, zero velocity, return
-        lda #0
-        sta fine_scroll
-        sta current_step
-        sta scroll_accum
-        sta do_coarse
-        lda #%00010000              ; DEN + YSCROLL=0
-        sta VIC_CTRL1
+        ; At forward limit: IRQ snaps fine scroll to 0 and stops
         lda #1
         sta fwd_limit_reached
-        rts
-@ssu_cancel:
+        sei
+        lda #2
+        sta cs_commit
         lda #0
-        sta do_coarse
+        sta cs_pending
+        cli
         rts
 @ssu_ok:
         lda #0
         sta fwd_limit_reached
 
-        ; ── Shift SCREEN + COLRAM up by one row (fully interleaved) ────────
-        .repeat 256, i
-        lda SCREEN+COLS+i
-        sta SCREEN+i
-        lda COLRAM+COLS+i
-        sta COLRAM+i
-        .endrepeat
-
-        .repeat 256, i
-        lda SCREEN+COLS+256+i
-        sta SCREEN+256+i
-        lda COLRAM+COLS+256+i
-        sta COLRAM+256+i
-        .endrepeat
-
-        .repeat 256, i
-        lda SCREEN+COLS+512+i
-        sta SCREEN+512+i
-        lda COLRAM+COLS+512+i
-        sta COLRAM+512+i
-        .endrepeat
-
-        .repeat 192, i
-        lda SCREEN+COLS+768+i
-        sta SCREEN+768+i
-        lda COLRAM+COLS+768+i
-        sta COLRAM+768+i
-        .endrepeat
-
-        ; ── Remap zone boundary colors after shift ───────────────
-        ; Row 8 moved from inner(9)→outer(8): light → base
-        ldx #39
-@ssu_remap8:
-        lda COLRAM + 8*COLS, x
-        and #$0F                    ; COLRAM is 4-bit; mask garbage high nibble
-        tay
-        lda color_to_base, y
-        sta COLRAM + 8*COLS, x
-        dex
-        bpl @ssu_remap8
-        ; Row 15 moved from outer(16)→inner(15): base → light
-        ldx #39
-@ssu_remap15:
-        lda COLRAM + 15*COLS, x
-        and #$0F
-        tay
-        lda color_to_light, y
-        sta COLRAM + 15*COLS, x
-        dex
-        bpl @ssu_remap15
-
-        ; Fill bottom row from render engine bot cursor
+        ; Source for the new bottom row (render engine bot cursor)
         lda rnd_bot_row
         beq @ssu_row0
         cmp #1
         beq @ssu_row1
         lda #<(rnd_bot_linebuf + 80)
-        sta zp_src
-        lda #>(rnd_bot_linebuf + 80)
-        sta zp_src+1
-        jmp @ssu_copy
+        ldx #>(rnd_bot_linebuf + 80)
+        jmp @ssu_src
 @ssu_row1:
         lda #<(rnd_bot_linebuf + 40)
-        sta zp_src
-        lda #>(rnd_bot_linebuf + 40)
-        sta zp_src+1
-        jmp @ssu_copy
+        ldx #>(rnd_bot_linebuf + 40)
+        jmp @ssu_src
 @ssu_row0:
         lda #<rnd_bot_linebuf
+        ldx #>rnd_bot_linebuf
+@ssu_src:
         sta zp_src
-        lda #>rnd_bot_linebuf
-        sta zp_src+1
-@ssu_copy:
+        stx zp_src+1
+
+        lda #UP_WINDOW_END
+        jsr wait_window
+        jsr coarse_commit
+        inc rows_from_start_lo
+        bne :+
+        inc rows_from_start_hi
+:
+        ; ── Shift SCREEN + COLRAM up one row ─────────────────────────────
+        SSU_BAND  0,  2
+        SSU_BAND  3,  6
+        SSU_BAND  7, 11
+        SSU_BAND 12, 17
+        SSU_BAND 18, 23
+
+        ; ── New bottom row ─────────────────────────────────────────────────
         ldy #0
-        .repeat 40
+        .repeat COLS
         lda (zp_src), y
         sta SCREEN + (ROWS-1)*COLS, y
         iny
         .endrepeat
-
-        ; Colour for new bottom row
         ldx #39
 @ssu_newcol:
         lda rnd_bot_colbuf, x
@@ -1351,19 +1451,61 @@ scroll_screen_up:
         dex
         bpl @ssu_newcol
 
+        ; Render ahead (not visible, only needs to finish before next coarse)
         jsr render_advance_bot
         jsr render_advance_top
-        inc rows_from_start_lo
-        bne @ssu_done
-        inc rows_from_start_hi
-@ssu_done:
         rts
 
 
-; ---- Coarse scroll down (reverse) -----------------------------------------
-; Shifts all screen rows down by one and fills the top row (row 0) with
-; text data from text_ptr - 25*COLS.  Decrements text_ptr with wrapping.
-; ---------------------------------------------------------------------------
+; ---- Coarse scroll down (reverse) -------------------------------------------
+; Shifts all rows down by one and fills row 0 from the render engine top
+; cursor.  Bands are processed top to bottom, each one bottom-up.
+
+; Colour value for destination row r, read into A: remap across zone edges.
+.macro SSD_COLFIX r
+    .if r = 9                       ; outer(8) → inner(9): base → light
+        and #$0F
+        tay
+        lda color_to_light, y
+    .elseif r = 16                  ; inner(15) → outer(16): light → base
+        and #$0F
+        tay
+        lda color_to_base, y
+    .endif
+.endmacro
+
+; One band: destination rows first..last, fully unrolled.  in_s/in_c hold
+; the old row first-1 (saved by the previous band, or the new row 0).  If
+; out_s is given, the old row `last` is saved there first for the next band.
+.macro SSD_BAND first, last, in_s, in_c, out_s, out_c
+        lda #(49 + 8*last)
+        jsr wait_beam_past
+    .ifnblank out_s
+      .repeat COLS, c
+        lda SCREEN + last*COLS + c
+        sta out_s + c
+        lda COLRAM + last*COLS + c
+        sta out_c + c
+      .endrepeat
+    .endif
+    .repeat last-first, k
+      .repeat COLS, c
+        lda SCREEN + (last-k-1)*COLS + c
+        sta SCREEN + (last-k)*COLS + c
+        lda COLRAM + (last-k-1)*COLS + c
+        SSD_COLFIX (last-k)
+        sta COLRAM + (last-k)*COLS + c
+      .endrepeat
+    .endrepeat
+    .repeat COLS, c
+        lda in_s + c
+        sta SCREEN + first*COLS + c
+        lda in_c + c
+        SSD_COLFIX first
+        sta COLRAM + first*COLS + c
+    .endrepeat
+.endmacro
+
 scroll_screen_down:
         ; Boundary check: if rows_from_start <= reverse_floor, snap fine
         ; scroll to 7, zero velocity, and return without moving.
@@ -1376,205 +1518,60 @@ scroll_screen_down:
         beq @ssd_at_floor           ; equal → at floor
         bcs @ssd_ok                 ; lo > floor_lo → allow
 @ssd_at_floor:
-        lda #7
-        sta fine_scroll
-        ora #%00010000              ; DEN | YSCROLL=7
-        sta VIC_CTRL1
+        sei
+        lda #3
+        sta cs_commit
         lda #0
-        sta current_step
-        sta scroll_accum
+        sta cs_pending
+        cli
         rts
 @ssd_ok:
-        ; ── Bookkeeping ──────────────────────────────────────────────────
         lda #0
         sta fwd_limit_reached
-        lda rows_from_start_lo
-        bne @ssd_dec_lo
-        dec rows_from_start_hi
-@ssd_dec_lo:
-        dec rows_from_start_lo
 
-        ; ── Save page 1 overlap (page 0 shift will overwrite [256..295]) ───
-        ; Pages 2-3 don't need saves: processed before page 0 in reverse order.
-        .repeat 40, i
-        lda SCREEN+256 + i
-        sta save_buf_a + i
-        lda COLRAM+256 + i
-        sta col_save_a + i
-        .endrepeat
-
-        ; ── Page 0: SCREEN + COLRAM fully interleaved (reverse order) ──────
-        .repeat 256, i
-        lda SCREEN + 255 - i
-        sta SCREEN+COLS + 255 - i
-        lda COLRAM + 255 - i
-        sta COLRAM+COLS + 255 - i
-        .endrepeat
-
-        ; ── Fill row 0 from render engine ────────────────────────────────
-        lda rnd_top_row
-        bne @ssd_fill_now
-
-        lda rnd_hist_count
-        bne @ssd_has_hist
-
-        jmp @ssd_fill_blank
-
-@ssd_has_hist:
-        ; rnd_top_row=0 with history: must retreat first to re-render,
-        ; then fill.  Mark deferred.
-        lda #1
-        sta ssd_fill_blank
-        jmp @ssd_page1
-
-@ssd_fill_now:
-        ; Fill from linebuf[(rnd_top_row - 1) * 40]
-        cmp #2
-        beq @ssd_fn_r1
-        lda #<rnd_top_linebuf
-        sta zp_src
-        lda #>rnd_top_linebuf
-        sta zp_src+1
-        jmp @ssd_fn_go
-@ssd_fn_r1:
-        lda #<(rnd_top_linebuf + 40)
-        sta zp_src
-        lda #>(rnd_top_linebuf + 40)
-        sta zp_src+1
-@ssd_fn_go:
-        ldy #0
-        .repeat 40
-        lda (zp_src), y
-        sta SCREEN, y
-        iny
-        .endrepeat
-        lda #0
-        sta ssd_fill_blank
-        jmp @ssd_fill_color
-
-@ssd_fill_blank:
-        lda #$00
-        .repeat 40, i
-        sta SCREEN + i
-        .endrepeat
-        lda #0
-        sta ssd_fill_blank
-
-@ssd_fill_color:
-        ; Colour for new top row
-        ldx #39
-@ssd_newcol:
-        lda rnd_top_colbuf, x
-        sta COLRAM, x
-        dex
-        bpl @ssd_newcol
-
-@ssd_page1:
-        ; ── SCREEN shifts (always, reverse page order) ───────────────────
-        .repeat 192, i
-        lda SCREEN+768 + 191 - i
-        sta SCREEN+768+COLS + 191 - i
-        .endrepeat
-        .repeat 256, i
-        lda SCREEN+512 + 255 - i
-        sta SCREEN+512+COLS + 255 - i
-        .endrepeat
-        .repeat 216, i
-        lda SCREEN+256 + 255 - i
-        sta SCREEN+256+COLS + 255 - i
-        .endrepeat
-        .repeat 40, i
-        lda save_buf_a + i
-        sta SCREEN+256+COLS + i
-        .endrepeat
-
-        ; ── COLRAM shifts + zone remap ────────────────────────
-        jsr ssd_colram_p3
-        jsr ssd_colram_p2
-        jsr ssd_colram_p1
-        ldx #39
-@ssd_remap9:
-        lda COLRAM + 9*COLS, x
-        and #$0F
-        tay
-        lda color_to_light, y
-        sta COLRAM + 9*COLS, x
-        dex
-        bpl @ssd_remap9
-        ldx #39
-@ssd_remap16:
-        lda COLRAM + 16*COLS, x
-        and #$0F
-        tay
-        lda color_to_base, y
-        sta COLRAM + 16*COLS, x
-        dex
-        bpl @ssd_remap16
-
-        ; ── Retreats ────────────────────────────────────────────────────
-        lda ssd_fill_blank
-        bne @ssd_deferred_retreat
-
-        ; Normal path: fill already done above
+        ; ── Prepare new row 0 before the copy window ─────────────────────
+        ; Retreat the top cursor first (may re-render its linebuf, or clear
+        ; it when entering the blank lead-in), then stage the row it points at.
         jsr render_retreat_top
-        jsr render_retreat_bot
-        rts
-
-@ssd_deferred_retreat:
-        ; Retreat re-renders linebuf, then fill row 0
-        jsr render_retreat_top
-        jsr render_retreat_bot
-        ; After retreat, rnd_top_row has been updated.  Pick linebuf row.
         lda rnd_top_row
-        beq @ssd_df_r0
+        beq @ssd_r0
         cmp #1
-        beq @ssd_df_r1
+        beq @ssd_r1
         lda #<(rnd_top_linebuf + 80)
-        sta zp_src
-        lda #>(rnd_top_linebuf + 80)
-        sta zp_src+1
-        jmp @ssd_df_go
-@ssd_df_r1:
+        ldx #>(rnd_top_linebuf + 80)
+        jmp @ssd_src
+@ssd_r1:
         lda #<(rnd_top_linebuf + 40)
+        ldx #>(rnd_top_linebuf + 40)
+        jmp @ssd_src
+@ssd_r0:
+        lda #<rnd_top_linebuf
+        ldx #>rnd_top_linebuf
+@ssd_src:
         sta zp_src
-        lda #>(rnd_top_linebuf + 40)
-        sta zp_src+1
-        jmp @ssd_df_go
-@ssd_df_r0:
-        ; After retreat from 0, check if we have content or need blanks
-        lda rnd_hist_count
-        ora rnd_top_row
-        bne :+
-        jmp @ssd_df_blank
-:       lda #<rnd_top_linebuf
-        sta zp_src
-        lda #>rnd_top_linebuf
-        sta zp_src+1
-@ssd_df_go:
-        ldy #0
-        .repeat 40
+        stx zp_src+1
+        ldy #COLS-1
+@ssd_stage:
         lda (zp_src), y
-        sta SCREEN, y
-        iny
-        .endrepeat
-        ; Colour for deferred fill
-        ldx #39
-@ssd_df_col:
-        lda rnd_top_colbuf, x
-        sta COLRAM, x
-        dex
-        bpl @ssd_df_col
-        rts
-@ssd_df_blank:
-        lda #$00
-        .repeat 40, i
-        sta SCREEN + i
-        .endrepeat
-        ; Colour for deferred blank (default base)
-        lda #$0F
-        .repeat 40, i
-        sta COLRAM + i
-        .endrepeat
+        sta newrow_buf, y
+        dey
+        bpl @ssd_stage
+
+        lda #DOWN_WINDOW_END
+        jsr wait_window
+        jsr coarse_commit
+        lda rows_from_start_lo
+        bne :+
+        dec rows_from_start_hi
+:       dec rows_from_start_lo
+
+        SSD_BAND  0,  2, newrow_buf, rnd_top_colbuf, ssd_sv0s, ssd_sv0c
+        SSD_BAND  3,  7, ssd_sv0s, ssd_sv0c, ssd_sv1s, ssd_sv1c
+        SSD_BAND  8, 13, ssd_sv1s, ssd_sv1c, ssd_sv2s, ssd_sv2c
+        SSD_BAND 14, 19, ssd_sv2s, ssd_sv2c, ssd_sv3s, ssd_sv3c
+        SSD_BAND 20, 24, ssd_sv3s, ssd_sv3c
+
+        jsr render_retreat_bot
         rts
 
 .segment "CODE"
@@ -1680,9 +1677,9 @@ build_velocity_table:
 ; Only updates current_step when a recognized number key is detected.
 ; ---------------------------------------------------------------------------
 read_keyboard:
+        jsr scan_keyboard
         ; --- Direction from SHIFT status ---
-        lda SHIFT_FLAG
-        and #$01                    ; bit 0 = SHIFT (includes SHIFT LOCK)
+        lda kb_shift                ; SHIFT or SHIFT LOCK
         beq @dir_fwd
         lda #$FF                    ; reverse
         sta direction
@@ -1692,7 +1689,7 @@ read_keyboard:
         sta direction
 
 @check_key:
-        lda CURR_KEY                ; current key matrix code
+        lda kb_code                 ; current key matrix code
         cmp #$40                    ; no key pressed
         bne @has_key
         rts
@@ -1785,6 +1782,67 @@ read_keyboard:
         sta current_step
 @rk_done:
         rts
+
+
+; ---- Scan keyboard matrix -------------------------------------------------
+; Replaces the KERNAL scan ($EA31) during scrolling: a held key (e.g. SHIFT
+; LOCK) makes SCNKEY decode the whole matrix every frame, which costs cycles
+; the coarse scroll copy needs.
+; Out: kb_code = KERNAL matrix code of a non-modifier key ($40 = none)
+;      kb_shift = nonzero if either SHIFT (or SHIFT LOCK) is down
+; Also mirrors kb_code into $CB/$C5 so the KERNAL does not see a held key as
+; a new press when scrolling ends.
+scan_keyboard:
+        lda #$40
+        sta kb_code
+        lda #0
+        sta kb_shift
+        sta $DC00                   ; all columns
+        lda $DC01
+        cmp #$FF
+        beq @sk_done                ; nothing pressed
+        ldx #7
+@sk_col:
+        lda kb_col_sel, x
+        sta $DC00
+        lda $DC01
+        eor #$FF                    ; 1 = pressed
+        beq @sk_next
+        tay
+        and kb_shift_bits, x
+        beq :+
+        sta kb_shift
+:       tya
+        and kb_key_bits, x          ; drop SHIFT/CTRL/C=
+        beq @sk_next
+        ; matrix code = column*8 + lowest set bit
+        ldy #$FF
+:       iny
+        lsr a
+        bcc :-
+        stx kb_tmp
+        tya
+        ldy kb_tmp
+        ora kb_col_x8, y
+        sta kb_code
+@sk_next:
+        dex
+        bpl @sk_col
+@sk_done:
+        lda #$7F
+        sta $DC00
+        lda kb_code
+        sta CURR_KEY
+        sta $C5                     ; KERNAL "last key" (no repeat on exit)
+        rts
+
+kb_col_sel:    .byte $FE, $FD, $FB, $F7, $EF, $DF, $BF, $7F
+kb_col_x8:     .byte $00, $08, $10, $18, $20, $28, $30, $38
+kb_shift_bits: .byte $00, $80, $00, $00, $00, $00, $10, $00  ; L-SHIFT, R-SHIFT
+kb_key_bits:   .byte $FF, $7F, $FF, $FF, $FF, $FF, $EF, $DB  ; minus SHIFTs, CTRL, C=
+kb_code:       .byte $40
+kb_shift:      .byte 0
+kb_tmp:        .byte 0
 
 
 ; ---- Disable raster IRQ and restore KERNAL ----------------------------------
@@ -4804,18 +4862,25 @@ cfg_base_speed: .byte $7E,$19,$99,$99,$9A       ; 0.15 (default)
 cfg_accel_curv: .byte $81,$8C,$CC,$CC,$CD       ; 1.10 (default)
 
 ; ---------------------------------------------------------------------------
-;  Save buffers for scroll_screen_down inter-page overlaps (3×40 bytes)
-;  When copying pages 0→1→2→3, each page's +40 shift overwrites the first
-;  40 bytes of the next page's source.  These buffers preserve those bytes.
+;  scroll_screen_down work buffers: new row 0 and the bottom row of each
+;  band (saved before the band overwrites it, read by the next band)
 ; ---------------------------------------------------------------------------
-save_buf_a: .res 40                     ; original SCREEN+256..295
-save_buf_b: .res 40                     ; original SCREEN+512..551
-save_buf_c: .res 40                     ; original SCREEN+768..807
+newrow_buf:  .res 40
+ssd_sv0s:    .res 40
+ssd_sv0c:    .res 40
+ssd_sv1s:    .res 40
+ssd_sv1c:    .res 40
+ssd_sv2s:    .res 40
+ssd_sv2c:    .res 40
+ssd_sv3s:    .res 40
+ssd_sv3c:    .res 40
 
-; COLRAM overlap save buffers for scroll_screen_down (3×40 bytes)
-col_save_a: .res 40
-col_save_b: .res 40
-col_save_c: .res 40
+; Coarse-scroll pipeline state
+next_fine:   .byte 0                    ; fine scroll to show at next vblank
+frame_ctr:   .byte 0                    ; incremented every vblank (IRQ state 2)
+start_frame: .byte 0                    ; frame_ctr when a coarse copy started
+wait_tgt:    .byte 0                    ; raster line wait_beam_past waits for
+s2_pixels:   .byte 0                    ; IRQ state 2 scratch
 
 ; Configurable colors
 cfg_font_color: .byte $0F               ; editor font color (C64 value, default light gray)
@@ -5490,46 +5555,6 @@ spr_left_tri:   ; at $3040
 .res (224-39)*8, 0
 
 ; =============================================================================
-;  SCROLL2 segment — unrolled COLRAM down-shift subroutines
-;  Placed in the gap between CODE and SPRITES ($271E-$36FF)
-; =============================================================================
-.segment "SCROLL2"
-
-; Fully unrolled COLRAM down-shift for scroll_screen_down pages 1-3.
-; Reverse page order (3→2→1): pages 2-3 read directly from original
-; COLRAM positions (page 0 hasn't run yet).  Page 1 reads overlap
-; from col_save_a (page 0 already overwrote COLRAM[256..295]).
-
-ssd_colram_p3:
-        ; 192 bytes: COLRAM[768..959] → COLRAM[808..999] (reverse order)
-        .repeat 192, i
-        lda COLRAM+768 + 191 - i
-        sta COLRAM+768+COLS + 191 - i
-        .endrepeat
-        rts
-
-ssd_colram_p2:
-        ; 256 bytes: COLRAM[512..767] → COLRAM[552..807] (reverse order)
-        .repeat 256, i
-        lda COLRAM+512 + 255 - i
-        sta COLRAM+512+COLS + 255 - i
-        .endrepeat
-        rts
-
-ssd_colram_p1:
-        ; Upper 216 bytes: COLRAM[296..511] → COLRAM[336..551]
-        .repeat 216, i
-        lda COLRAM+256+COLS + 215 - i
-        sta COLRAM+256+COLS+COLS + 215 - i
-        .endrepeat
-        ; Overlap 40 bytes: col_save_a → COLRAM[296..335]
-        .repeat 40, i
-        lda col_save_a + i
-        sta COLRAM+256+COLS + i
-        .endrepeat
-        rts
-
-; =============================================================================
 ;  BSS segment — runtime-only document buffer (not stored in PRG file)
 ; =============================================================================
 .segment "BSS"
@@ -5572,7 +5597,6 @@ rnd_bot_next_hi: .res 1
 rnd_top_skip:    .res 1            ; blank-tile rollover skip count (counts down from 4 at init)
 rows_from_start_lo: .res 1        ; 16-bit coarse-row distance from starting position (lo)
 rows_from_start_hi: .res 1        ;   (hi) — clamped at 0, prevents reverse past doc start
-ssd_fill_blank:  .res 1           ; non-zero → top retreat clamped, fill row 0 with blank
 max_rows_fwd_lo: .res 1           ; 16-bit forward scroll limit (lo) = 3 × rendered line count
 max_rows_fwd_hi: .res 1           ;   (hi)
 fwd_limit_reached: .res 1        ; nonzero → at forward scroll limit (used by IRQ to avoid flicker)
